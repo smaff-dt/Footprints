@@ -277,9 +277,16 @@
     detail: 2,
     showDots: true,
     collapsed: false,
-    hover: null,
+    // "inspect": point at the page to read its numbers, clicks do not reach the site.
+    // "browse": the site works normally.
+    mode: "inspect",
+    areas: [],
+    rest: null,
+    hover: null, // what is under the pointer
+    pinned: null, // what was clicked in inspect mode
     found: [], // { el, row }
     missing: [], // rows not found on the page
+    byEl: new Map(), // clicked element -> row
   };
 
   let host = null;
@@ -290,14 +297,18 @@
     * { box-sizing: border-box; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
     .layer { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
     .area { position: absolute; border-radius: 6px; border: 2px solid rgba(184,70,26,.75); }
-    .area.hot { border: 3px solid #2F4BD8; box-shadow: 0 0 0 4px rgba(47,75,216,.25); }
-    .chip { position: absolute; left: 4px; top: 4px; pointer-events: auto; cursor: default;
+    .chip { position: absolute; left: 4px; top: 4px; pointer-events: none;
       display: inline-flex; gap: 6px; align-items: center; max-width: calc(100% - 8px);
       padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; line-height: 1.4;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
     .dot { position: absolute; border-radius: 50%; transform: translate(-50%, -50%);
       background: rgba(47,75,216,.85); border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
-    .panel { position: fixed; top: 12px; right: 12px; width: 320px; max-height: calc(100vh - 24px); overflow: auto;
+    .hl { position: absolute; display: none; pointer-events: none; border-radius: 6px; border: 3px solid #2F4BD8;
+      box-shadow: 0 0 0 4px rgba(47,75,216,.25); }
+    .hl.area-target { border-style: dashed; }
+    .hl.pinned { box-shadow: 0 0 0 4px rgba(47,75,216,.3), 0 0 0 100vmax rgba(22,25,31,.18); }
+    .capture { position: fixed; inset: 0; pointer-events: auto; cursor: crosshair; background: transparent; }
+    .panel { position: fixed; top: 12px; right: 12px; width: 330px; max-height: calc(100vh - 24px); overflow: auto;
       pointer-events: auto; background: #fff; color: #16191F; border: 1px solid #E2E5EA; border-radius: 14px;
       box-shadow: 0 8px 28px rgba(22,25,31,.22); padding: 14px; font-size: 13px; line-height: 1.45; }
     .panel.collapsed { width: auto; }
@@ -306,7 +317,11 @@
     .muted { color: #5B6270; }
     .btn { min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid #CDD2DA; background: #fff;
       color: #16191F; font-size: 12px; font-weight: 600; cursor: pointer; }
-    .btn:focus-visible, input:focus-visible { outline: 3px solid #2F4BD8; outline-offset: 2px; }
+    button:focus-visible, input:focus-visible { outline: 3px solid #2F4BD8; outline-offset: 2px; }
+    .seg { display: flex; gap: 3px; padding: 3px; margin-top: 10px; background: #F1F3F6; border-radius: 10px; }
+    .seg button { flex: 1; min-height: 34px; border: 0; border-radius: 8px; background: transparent; color: #5B6270;
+      font-size: 12px; font-weight: 700; cursor: pointer; }
+    .seg button[aria-pressed="true"] { background: #fff; color: #16191F; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
     .stats { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; margin: 10px 0; }
     .stat { background: #F1F3F6; border-radius: 8px; padding: 8px; }
     .stat b { display: block; font-size: 16px; }
@@ -315,12 +330,18 @@
     input[type=range] { width: 100%; accent-color: #2F4BD8; }
     .scale { display: flex; justify-content: space-between; font-size: 11px; color: #5B6270; }
     ol { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
-    li { padding: 6px 8px; border-radius: 8px; border: 1px solid #E2E5EA; cursor: default; }
-    li.hot { border-color: #2F4BD8; background: #EEF1FD; }
+    .item { width: 100%; text-align: left; padding: 6px 8px; border-radius: 8px; border: 1px solid #E2E5EA;
+      background: #fff; color: #16191F; font-size: 13px; cursor: pointer; }
+    .item.hot { border-color: #2F4BD8; background: #EEF1FD; }
     .bar { height: 5px; border-radius: 3px; background: #F1F3F6; margin-top: 4px; }
     .bar span { display: block; height: 5px; border-radius: 3px; background: linear-gradient(90deg,#EE9B4D,#B8461A); }
-    .detail { margin-top: 10px; padding: 10px; border-radius: 10px; background: #F6F7F9; }
+    .detail { margin-top: 10px; padding: 12px; border-radius: 10px; background: #F6F7F9; }
     .detail ul { margin: 6px 0 0; padding-left: 16px; }
+    .kicker { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #5B6270; }
+    .big { font-size: 30px; font-weight: 800; color: #B8461A; line-height: 1.1; margin-top: 6px; }
+    .minis { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; margin-top: 8px; }
+    .mini { background: #fff; border-radius: 8px; padding: 6px; font-size: 11px; color: #5B6270; }
+    .mini b { display: block; font-size: 14px; color: #16191F; }
   `;
 
   function ensureHost() {
@@ -335,33 +356,40 @@
   function locate() {
     state.found = [];
     state.missing = [];
+    state.byEl = new Map();
     for (const row of state.payload.elements) {
       const el = findElement(row.xpath);
-      if (el && el.getClientRects().length > 0) state.found.push({ el, row });
-      else state.missing.push(row);
+      if (el && el.getClientRects().length > 0) {
+        state.found.push({ el, row });
+        // Clicks on the bare page background are not an element you can point at.
+        if (el !== document.body && el !== document.documentElement) state.byEl.set(el, row);
+      } else state.missing.push(row);
     }
+    // Selections may point at elements that are gone after the page changed.
+    const alive = (t) => t && document.contains(t.el);
+    if (!alive(state.pinned)) state.pinned = null;
+    if (!alive(state.hover)) state.hover = null;
   }
 
   function buildAreas() {
     const total = pageArea();
     const cache = new Map();
     const byEl = new Map();
-    const rest = { key: "rest", el: null, clicks: 0, rows: [] };
+    const rest = { key: "rest", el: null, clicks: 0, items: [] };
     for (const f of state.found) {
       const chain = areaChain(f.el, total, cache);
       const area = chain.length ? chain[Math.min(state.detail, chain.length) - 1] : null;
       if (!area) {
         rest.clicks += f.row.clicks;
-        rest.rows.push(f.row);
+        rest.items.push(f);
         continue;
       }
-      if (!byEl.has(area)) byEl.set(area, { key: "", el: area, clicks: 0, rows: [] });
+      if (!byEl.has(area)) byEl.set(area, { key: "", el: area, clicks: 0, items: [] });
       const a = byEl.get(area);
       a.clicks += f.row.clicks;
-      a.rows.push(f.row);
+      a.items.push(f);
     }
     const areas = Array.from(byEl.values());
-    // Readable, unique names
     const seen = new Map();
     const ctx = { total, cache };
     for (const a of areas) {
@@ -373,12 +401,15 @@
       a.box = pageBox(a.el);
     }
     areas.forEach((a, i) => (a.key = `a${i}`));
-    return { areas, rest };
+    state.areas = areas;
+    state.rest = rest;
   }
 
+  // ── Small helpers ─────────────────────────────────────────────────────────
+
   function pct(n, total) {
-    if (!total) return "0%";
-    const v = (100 * n) / total;
+    if (!total) return "–";
+    const v = Math.min(100, (100 * n) / total);
     return v > 0 && v < 0.1 ? "<0.1%" : `${v.toFixed(v >= 10 ? 0 : 1)}%`;
   }
 
@@ -396,15 +427,147 @@
     return { bg: "#F6D9A8", fg: "#16191F" };
   }
 
+  const KINDS = { a: "link", button: "button", input: "field", select: "dropdown", textarea: "text box", img: "image", label: "label" };
+
+  /** What the element says on screen: its label, alt text, or visible text. */
+  function elementName(el, fallback) {
+    const own =
+      el.getAttribute("aria-label") ||
+      el.getAttribute("alt") ||
+      el.getAttribute("title") ||
+      (el.innerText || "").split("\n").map((s) => s.trim()).find(Boolean) ||
+      el.getAttribute("placeholder") ||
+      el.getAttribute("value") ||
+      "";
+    const kind = KINDS[el.localName] || (el.closest("a") ? "link" : el.closest("button") ? "button" : "element");
+    if (own) return `${clip(own, 40)} (${kind})`;
+    return fallback || kind.charAt(0).toUpperCase() + kind.slice(1);
+  }
+
+  function areaContaining(node) {
+    let best = null;
+    for (const a of state.areas) {
+      if (a.el.contains(node) && (!best || a.box.w * a.box.h < best.box.w * best.box.h)) best = a;
+    }
+    return best;
+  }
+
+  function pageClicks() {
+    return state.found.reduce((s, f) => s + f.row.clicks, 0) + state.missing.reduce((s, r) => s + r.clicks, 0);
+  }
+
+  // ── Inspect: point at the page to read its numbers ────────────────────────
+
+  function targetAt(x, y) {
+    const hit = document.elementsFromPoint(x, y).find((n) => n !== host && !(host && host.contains(n)));
+    if (!hit) return null;
+    for (let n = hit; n && n !== document.documentElement; n = n.parentElement) {
+      const row = state.byEl.get(n);
+      if (row) return { kind: "element", el: n, row };
+    }
+    const area = areaContaining(hit);
+    if (area) return { kind: "area", area, el: area.el, hit };
+    return { kind: "blank", el: hit };
+  }
+
+  function sameTarget(a, b) {
+    if (!a || !b) return a === b;
+    return a.kind === b.kind && a.el === b.el;
+  }
+
+  function detailHtml(t) {
+    const p = state.payload;
+    const total = pageClicks();
+    const pinnedNote = t && state.pinned ? `<div class="muted" style="margin-top:8px">Selected · press Esc or click it again to release.</div>` : "";
+    if (!t) {
+      return `<div class="detail muted">${
+        state.mode === "inspect"
+          ? "Point at anything on the page to see how often it is clicked. Click to keep it selected."
+          : "Switch to <strong>Inspect</strong> to point at the page and read its numbers."
+      }</div>`;
+    }
+    if (t.kind === "element") {
+      const area = areaContaining(t.el);
+      const perVisit = t.row.visits ? (t.row.clicks / t.row.visits).toFixed(1) : "–";
+      return `<div class="detail">
+        <div class="kicker">Element</div>
+        <strong>${esc(elementName(t.el, t.row.label))}</strong>
+        ${area ? `<div class="muted">in ${esc(area.name)}</div>` : ""}
+        <div class="big">${pct(t.row.visits, p.pageVisits)}</div>
+        <div class="muted">of visits to this page click it</div>
+        <div class="minis">
+          <div class="mini">Visits<b>${fmt(t.row.visits)}</b></div>
+          <div class="mini">Clicks<b>${fmt(t.row.clicks)}</b></div>
+          <div class="mini">Per visit<b>${perVisit}</b></div>
+        </div>
+        <div class="muted" style="margin-top:6px">${pct(t.row.clicks, total)} of all clicks on the page.</div>
+        ${pinnedNote}</div>`;
+    }
+    if (t.kind === "area") {
+      const a = t.area;
+      const top = a.items
+        .slice()
+        .sort((x, y) => y.row.clicks - x.row.clicks)
+        .slice(0, 5)
+        .map((f) => `<li>${esc(elementName(f.el, f.row.label))} — ${pct(f.row.visits, p.pageVisits)} of visits</li>`)
+        .join("");
+      return `<div class="detail">
+        <div class="kicker">Area</div>
+        <strong>${esc(a.name)}</strong>
+        <div class="big">${pct(a.clicks, total)}</div>
+        <div class="muted">of the page's clicks happen here (${fmt(a.clicks)} clicks)</div>
+        <div style="margin-top:8px;font-weight:600">Most clicked inside</div>
+        <ul>${top}</ul>
+        ${pinnedNote}</div>`;
+    }
+    const area = areaContaining(t.el);
+    return `<div class="detail">
+      <div class="kicker">Not clicked</div>
+      <strong>${esc(elementName(t.el, ""))}</strong>
+      <div class="muted" style="margin-top:4px">Nobody clicked here in this period${area ? `, inside ${esc(area.name)}` : ""}.</div>
+      ${pinnedNote}</div>`;
+  }
+
+  /** Updates only the highlight and the detail box (cheap, runs on mouse moves). */
+  function updateInspect() {
+    if (!root) return;
+    const t = state.pinned || state.hover;
+    const hl = root.getElementById("fp-hl");
+    if (hl) {
+      if (t && t.el) {
+        const b = pageBox(t.el);
+        hl.style.cssText = `display:block;left:${b.x - 3}px;top:${b.y - 3}px;width:${b.w + 6}px;height:${b.h + 6}px`;
+        hl.className = `hl${t.kind === "area" ? " area-target" : ""}${state.pinned ? " pinned" : ""}`;
+      } else {
+        hl.style.display = "none";
+      }
+    }
+    const box = root.getElementById("fp-detail-box");
+    if (box) box.innerHTML = detailHtml(t);
+    root.querySelectorAll("[data-area]").forEach((n) => {
+      n.classList.toggle("hot", !!t && t.kind === "area" && t.area.key === n.dataset.area);
+    });
+  }
+
+  // ── Full render (on data, detail or layout changes) ───────────────────────
+
   function render() {
     if (!state.payload) return;
     ensureHost();
+    buildAreas();
+    // Areas are rebuilt: point selections at the new area objects.
+    const refresh = (t) => {
+      if (!t || t.kind !== "area") return t;
+      const a = state.areas.find((x) => x.el === t.el);
+      return a ? { ...t, area: a } : null;
+    };
+    state.pinned = refresh(state.pinned);
+    state.hover = refresh(state.hover);
     const p = state.payload;
-    const { areas, rest } = buildAreas();
-    const pageClicks = state.found.reduce((s, f) => s + f.row.clicks, 0) + state.missing.reduce((s, r) => s + r.clicks, 0);
+    const areas = state.areas;
+    const total = pageClicks();
     const maxClicks = Math.max(1, ...areas.map((a) => a.clicks));
     const ranked = areas.slice().sort((a, b) => b.clicks - a.clicks);
-    const hot = areas.find((a) => a.key === state.hover) || null;
 
     const areaHtml = areas
       .slice()
@@ -413,8 +576,8 @@
         const r = a.clicks / maxClicks;
         const c = heat(r);
         const alpha = (0.1 + 0.4 * r).toFixed(2);
-        return `<div class="area ${a.key === state.hover ? "hot" : ""}" style="left:${a.box.x}px;top:${a.box.y}px;width:${a.box.w}px;height:${a.box.h}px;background:rgba(232,116,46,${alpha})">
-          <span class="chip" data-area="${a.key}" style="background:${c.bg};color:${c.fg}">${esc(a.name)} · ${pct(a.clicks, pageClicks)}</span></div>`;
+        return `<div class="area" style="left:${a.box.x}px;top:${a.box.y}px;width:${a.box.w}px;height:${a.box.h}px;background:rgba(232,116,46,${alpha})">
+          <span class="chip" style="background:${c.bg};color:${c.fg}">${esc(a.name)} · ${pct(a.clicks, total)}</span></div>`;
       })
       .join("");
 
@@ -427,7 +590,7 @@
           .map((f) => {
             const b = pageBox(f.el);
             const size = 8 + Math.round(14 * Math.sqrt(f.row.clicks / maxEl));
-            return `<div class="dot" title="${esc(f.row.label)}: ${fmt(f.row.clicks)} clicks" style="left:${b.x + b.w / 2}px;top:${b.y + b.h / 2}px;width:${size}px;height:${size}px"></div>`;
+            return `<div class="dot" style="left:${b.x + b.w / 2}px;top:${b.y + b.h / 2}px;width:${size}px;height:${size}px"></div>`;
           })
           .join("")
       : "";
@@ -435,22 +598,11 @@
     const listHtml = ranked
       .slice(0, 10)
       .map(
-        (a) => `<li class="${a.key === state.hover ? "hot" : ""}" data-area="${a.key}">
-          <div class="row"><strong>${esc(a.name)}</strong><span>${pct(a.clicks, pageClicks)}</span></div>
-          <div class="bar"><span style="width:${Math.max(3, Math.round((100 * a.clicks) / maxClicks))}%"></span></div></li>`,
+        (a) => `<li><button type="button" class="item" data-area="${a.key}">
+          <span class="row"><strong>${esc(a.name)}</strong><span>${pct(a.clicks, total)}</span></span>
+          <span class="bar" style="display:block"><span style="width:${Math.max(3, Math.round((100 * a.clicks) / maxClicks))}%"></span></span></button></li>`,
       )
       .join("");
-
-    const detailHtml = hot
-      ? `<div class="detail"><strong>${esc(hot.name)}</strong>
-          <div>${fmt(hot.clicks)} clicks · ${pct(hot.clicks, pageClicks)} of the page's clicks</div>
-          <ul>${hot.rows
-            .slice()
-            .sort((a, b) => b.clicks - a.clicks)
-            .slice(0, 5)
-            .map((r) => `<li style="border:0;padding:0">${esc(r.label)} — ${fmt(r.clicks)} clicks, ${fmt(r.visits)} visits</li>`)
-            .join("")}</ul></div>`
-      : `<div class="detail muted">Point at an area to see what is clicked inside it.</div>`;
 
     const foundClicks = state.found.reduce((s, f) => s + f.row.clicks, 0);
     const notes = [];
@@ -465,55 +617,92 @@
       );
     } else if (state.missing.length) {
       notes.push(
-        `${pct(pageClicks - foundClicks, pageClicks)} of the clicks are on elements that are not on screen now (menus, pop-ups, or content that changed).`,
+        `${pct(total - foundClicks, total)} of the clicks are on elements that are not on screen now (menus, pop-ups, or content that changed).`,
       );
     }
-    if (rest.clicks) {
-      notes.push(`${pct(rest.clicks, pageClicks)} of the clicks are on empty parts of the page, outside every area.`);
+    if (state.rest && state.rest.clicks) {
+      notes.push(`${pct(state.rest.clicks, total)} of the clicks are on empty parts of the page, outside every area.`);
     }
     const w = window.innerWidth;
     if ((p.deviceKey === "desktop" && w < 1024) || (p.deviceKey === "mobile" && w >= 768) || (p.deviceKey === "tablet" && (w < 768 || w >= 1024))) {
-      notes.push(`The data is for ${esc(p.device.toLowerCase())}, but this window is ${w}px wide: resize it to see the page as those visitors did.`);
+      notes.push(`The data is for ${esc(String(p.device).toLowerCase())}, but this window is ${w}px wide: resize it to see the page as those visitors did.`);
     }
 
+    const inspect = state.mode === "inspect";
     const panelHtml = state.collapsed
-      ? `<div class="panel collapsed"><div class="row"><span class="brand">Footprints</span><button class="btn" data-act="expand">Show panel</button></div></div>`
-      : `<div class="panel">
+      ? `<div class="panel collapsed"><div class="row"><span class="brand">Footprints</span><button type="button" class="btn" data-act="expand">Show panel</button></div></div>`
+      : `<div class="panel" role="dialog" aria-label="Footprints">
           <div class="row"><span class="brand">Footprints</span>
-            <span><button class="btn" data-act="collapse" aria-label="Minimise panel">–</button>
-            <button class="btn" data-act="close" aria-label="Remove overlay">✕</button></span></div>
+            <span><button type="button" class="btn" data-act="collapse" aria-label="Minimise panel">–</button>
+            <button type="button" class="btn" data-act="close" aria-label="Remove overlay">✕</button></span></div>
           <div class="muted">${esc(p.app || "")} · ${esc(p.period || "")} · ${esc(p.device || "")}</div>
+          <div class="seg" role="group" aria-label="Mode">
+            <button type="button" data-act="inspect" aria-pressed="${inspect}">Inspect</button>
+            <button type="button" data-act="browse" aria-pressed="${!inspect}">Use the site</button>
+          </div>
+          <div id="fp-detail-box"></div>
           <div class="stats">
-            <div class="stat">Clicks on this page<b>${fmt(pageClicks)}</b></div>
+            <div class="stat">Clicks on this page<b>${fmt(total)}</b></div>
             <div class="stat">Areas<b>${fmt(areas.length)}</b></div>
           </div>
           <label for="fp-detail">Detail</label>
           <input id="fp-detail" type="range" min="1" max="5" step="1" value="${state.detail}" />
           <div class="scale"><span>Fewer, larger areas</span><span>More, smaller</span></div>
           <label style="font-weight:500"><input type="checkbox" data-act="dots" ${state.showDots ? "checked" : ""}/> Show clicked elements</label>
-          <ol>${listHtml}</ol>
-          ${detailHtml}
+          <ol aria-label="Most clicked areas">${listHtml}</ol>
           ${notes.map((n) => `<div class="note">${n}</div>`).join("")}
         </div>`;
 
-    root.innerHTML = `<style>${CSS}</style><div class="layer">${areaHtml}${dotHtml}</div>${panelHtml}`;
+    root.innerHTML = `<style>${CSS}</style>
+      <div class="layer">${areaHtml}${dotHtml}<div id="fp-hl" class="hl"></div></div>
+      ${inspect ? `<div class="capture" id="fp-capture"></div>` : ""}
+      ${panelHtml}`;
     wire();
+    updateInspect();
   }
 
   function wire() {
+    const capture = root.getElementById("fp-capture");
+    if (capture) {
+      let frame = 0;
+      capture.addEventListener("mousemove", (e) => {
+        if (frame) return;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          const t = targetAt(e.clientX, e.clientY);
+          if (!sameTarget(t, state.hover)) {
+            state.hover = t;
+            updateInspect();
+          }
+        });
+      });
+      capture.addEventListener("mouseleave", () => {
+        state.hover = null;
+        updateInspect();
+      });
+      capture.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const t = targetAt(e.clientX, e.clientY);
+        state.pinned = sameTarget(t, state.pinned) ? null : t;
+        updateInspect();
+      });
+    }
     root.querySelectorAll("[data-area]").forEach((n) => {
-      n.addEventListener("mouseenter", () => {
-        if (state.hover !== n.dataset.area) {
-          state.hover = n.dataset.area;
-          render();
-        }
+      n.addEventListener("click", () => {
+        const a = state.areas.find((x) => x.key === n.dataset.area);
+        if (!a) return;
+        state.pinned = { kind: "area", area: a, el: a.el };
+        a.el.scrollIntoView({ behavior: "smooth", block: "center" });
+        updateInspect();
       });
     });
     const slider = root.getElementById("fp-detail");
     if (slider) {
       slider.addEventListener("change", () => {
         state.detail = Number(slider.value);
-        state.hover = null;
+        if (state.pinned && state.pinned.kind === "area") state.pinned = null;
+        if (state.hover && state.hover.kind === "area") state.hover = null;
         render();
         const s = root.getElementById("fp-detail");
         if (s) s.focus();
@@ -522,14 +711,28 @@
     const act = (name, fn) => root.querySelectorAll(`[data-act="${name}"]`).forEach((n) => n.addEventListener("click", fn));
     const dots = root.querySelector('[data-act="dots"]');
     if (dots) dots.addEventListener("change", () => ((state.showDots = dots.checked), render()));
+    act("inspect", () => ((state.mode = "inspect"), render()));
+    act("browse", () => ((state.mode = "browse"), (state.hover = null), (state.pinned = null), render()));
     act("collapse", () => ((state.collapsed = true), render()));
     act("expand", () => ((state.collapsed = false), render()));
     act("close", () => {
       state.payload = null;
       if (host) host.remove();
       host = null;
+      root = null;
     });
   }
+
+  document.addEventListener(
+    "keydown",
+    (e) => {
+      if (e.key === "Escape" && state.payload && state.pinned) {
+        state.pinned = null;
+        updateInspect();
+      }
+    },
+    true,
+  );
 
   // Redraw when the page layout changes (resizes, late-loading content).
   let timer = null;
@@ -550,13 +753,15 @@
   function show(payload) {
     state.payload = payload;
     state.hover = null;
+    state.pinned = null;
+    state.mode = "inspect";
     locate();
     render();
     // Content often keeps loading after the page is "complete".
     setTimeout(schedule, 1500);
   }
 
-  window.__footprints = { show, findElement, readSegment };
+  window.__footprints = { show, findElement, readSegment, targetAt: (x, y) => targetAt(x, y) };
 
   if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

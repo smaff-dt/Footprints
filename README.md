@@ -28,8 +28,14 @@ It reads the user interactions captured by Dynatrace Real User Monitoring
    - colors each area by its share of the page's clicks and lists the most
      clicked ones in a side panel. Pointing at an area shows what is clicked
      inside it.
-3. A **Detail** slider switches between fewer, larger areas and more, smaller
-   ones. It is the only control.
+3. **Inspect** (on by default): point at anything on the page — a button, a
+   banner, an empty part of a card — and the panel shows its numbers: share of
+   visits that click it, visits, clicks, clicks per visit, and the area it
+   belongs to. Click to keep it selected; Esc releases it. While inspecting,
+   clicks do not reach the site, but the page still scrolls. Switch to
+   **Use the site** to navigate normally.
+4. A **Detail** slider switches between fewer, larger areas and more, smaller
+   ones.
 
 If the app cannot reach the extension, it offers **Copy page data**: open the
 page, click the Footprints icon in the browser toolbar and choose
@@ -168,4 +174,5 @@ headless Chromium (Python Playwright):
 python3 tests/overlay/run.py         # finds elements, builds areas at each detail level
 python3 tests/overlay/e2e.py         # real extension: app → new tab → overlay → reload
 python3 tests/overlay/frame_test.py  # same, from a sandboxed frame like the Dynatrace app
+python3 tests/overlay/inspect_test.py # inspect: numbers on hover, clicks blocked, scrolling works
 ```
