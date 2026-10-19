@@ -111,7 +111,8 @@ export function pagesQuery(f: Filters): string {
     deviceFilter(f.device),
     `| fieldsAdd page_template = ${PAGE_EXPR}`,
     "| filter isNotNull(page_template)",
-    "| summarize clicks = count(), visits = countDistinct(dt.rum.session.id), by: {page_template}",
+    "| summarize clicks = count(), visits = countDistinct(dt.rum.session.id), " +
+      "sample = takeAny(coalesce(view.url.full, page.url.full)), by: {page_template}",
     "| sort visits desc",
     "| limit 100",
   );

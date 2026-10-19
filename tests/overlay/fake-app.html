@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Fake Footprints app</title></head>
+<body>
+<p id="status">waiting</p>
+<script>
+  // Mirrors ui/lib/extension.ts: ping, then ask the extension to open a page.
+  const log = (t) => (document.getElementById("status").textContent = t);
+  let installed = false;
+  window.addEventListener("message", (e) => {
+    if (e.source !== window || !e.data || e.data.source !== "footprints-extension") return;
+    if (e.data.type === "pong") { installed = true; log("pong"); }
+    if (e.data.type === "shown") log(e.data.ok ? "shown-ok" : "shown-error: " + e.data.error);
+  });
+  window.postMessage({ source: "footprints-app", type: "ping" }, "*");
+  window.footprintsShow = (payload) =>
+    window.postMessage({ source: "footprints-app", type: "show", requestId: "r1", payload }, "*");
+</script>
+</body></html>

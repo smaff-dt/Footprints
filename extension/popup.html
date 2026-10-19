@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Footprints</title>
+    <style>
+      body { margin: 0; width: 300px; font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; color: #16191F; }
+      main { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+      h1 { margin: 0; font-size: 16px; }
+      p { margin: 0; color: #5B6270; }
+      button { min-height: 40px; border-radius: 10px; border: 1px solid #16191F; background: #16191F; color: #fff;
+        font: inherit; font-weight: 600; cursor: pointer; }
+      button:focus-visible { outline: 3px solid #2F4BD8; outline-offset: 2px; }
+      #status { min-height: 18px; }
+      .error { color: #9A3412; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Footprints</h1>
+      <p>Open a page from the Footprints app with <strong>Show on the page</strong> and the clicks appear on it automatically.</p>
+      <p>If that does not work, use <strong>Copy page data</strong> in the app, open the page here, then:</p>
+      <button id="paste" type="button">Show copied data on this tab</button>
+      <p id="status" role="status"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

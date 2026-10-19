@@ -3,14 +3,49 @@
 **See which parts of a page your visitors click, use and ignore.**
 
 Footprints is a Dynatrace app for business, marketing and CX teams. Pick a
-website and one of its pages, choose a period and a device, and Footprints
-ranks the page's sections by how many visits click them. Nobody needs to write
-or read a query: everything is dropdowns, toggles and checkboxes.
+website and one of its pages, choose a period and a device, and click
+**Show on the page**: the live page opens with its areas colored by how much
+they are clicked. Nothing has to be configured, and nobody needs to write or
+read a query.
 
 It reads the user interactions captured by Dynatrace Real User Monitoring
-(RUM) on Grail.
+(RUM) on Grail. It has two parts:
 
-## What you can do today (phase 1)
+- the **app** (`ui/`), which runs on Dynatrace and reads the data with the
+  user's own login;
+- the **browser extension** (`extension/`), which draws the data on the live
+  page. It never needs Dynatrace credentials: the app hands it the data.
+
+## Show on the page (prototype)
+
+1. In the app, choose an application and a page, then click **Show on the page**.
+2. The page opens in a new tab. The extension:
+   - finds every clicked element on the page;
+   - divides the page into **areas automatically**, from what the page looks
+     like: header, navigation, footer, named components, large visual blocks
+     such as banners, cards and lists;
+   - names each area from the page itself (its heading, its label, its role);
+   - colors each area by its share of the page's clicks and lists the most
+     clicked ones in a side panel. Pointing at an area shows what is clicked
+     inside it.
+3. A **Detail** slider switches between fewer, larger areas and more, smaller
+   ones. It is the only control.
+
+If the app cannot reach the extension, it offers **Copy page data**: open the
+page, click the Footprints icon in the browser toolbar and choose
+**Show copied data on this tab**.
+
+### Install the extension (Chrome or Edge)
+
+1. Open `chrome://extensions` (or `edge://extensions`).
+2. Turn on **Developer mode** (top right).
+3. Click **Load unpacked** and choose the `extension` folder of this
+   repository.
+
+After updating the repository, click the reload icon on the Footprints card
+in the same page.
+
+## The report view (phase 1)
 
 - Choose an **application** and one of its **pages**. Pages are grouped
   automatically: query strings are removed and numeric ids become `*`, so
@@ -36,17 +71,18 @@ around it and turns the name into a readable label ("Login form"). Icons
 (`fa-icon`, `mat-icon`) and the application shell (`app-root`) are skipped.
 
 Sites without components show most clicks under "Outside any section"; for
-those, switch to **Individual elements**. Phase 2 adds sections drawn by the
-user on a snapshot of the page, which works on any site.
+those, switch to **Individual elements**, or better, use **Show on the page**,
+which works on any site.
 
 ## Roadmap
 
-| Phase | What it adds |
+| Step | What it adds |
 |---|---|
-| 1 ✅ | Automatic sections, filters, ranking, plain-language details |
-| 2 | Chrome extension that captures a page snapshot; sections drawn and renamed on the snapshot; colored overlay of the page |
-| 3 | Conversion ("of the visits that clicked here, how many booked?"), comparison with a previous period or another segment, automatic insights |
-| 4 | Click heatmap on the snapshot, frustration (rage) clicks |
+| 1 ✅ | Report view: automatic sections, filters, ranking, plain-language details |
+| 2 🧪 | Show on the page: automatic areas drawn on the live page (prototype) |
+| 3 | Rename an area once for everyone; visits per area (not only clicks); save a snapshot of the colored page in the app |
+| 4 | Conversion ("of the visits that clicked here, how many booked?"), comparison with a previous period or another segment, automatic insights |
+| 5 | Click heatmap, frustration (rage) clicks |
 
 ## Data requirements
 
@@ -88,8 +124,16 @@ account needs permission to deploy apps.
 ## Project layout
 
 ```
+extension/
+  manifest.json           Chrome extension (Manifest V3)
+  bridge.js               runs in the app's frame; relays the app's requests
+  background.js           opens the page and draws the overlay once it has loaded
+  overlay.js              finds clicked elements, builds areas, draws them
+  popup.html/js           "Show copied data on this tab" fallback
 ui/
   App.tsx                 page layout, filters and state
+  components/ShowOnPage   the "Show on the page" button and its fallback
+  lib/extension.ts        messages between the app and the extension
   components/             dropdowns, toggles, ranking list, details, empty/error states
   dql/queries.ts          every DQL query, built from the filter choices
   dql/client.ts           runs queries and polls long-running ones
@@ -105,3 +149,23 @@ ui/
 - On sites without component tags, automatic sections are not useful yet (see
   phase 2).
 - "Visits" are RUM sessions.
+- On the live page, areas show their **share of clicks**. Visits per area
+  (how many visits clicked somewhere in it) come in step 3.
+- Elements that are not on screen when the page opens (closed menus, pop-ups,
+  content that changed since the clicks happened) cannot be drawn; the panel
+  says how many clicks that concerns.
+- Pages are opened at an address seen in the data. Addresses that only work
+  inside the company network, or pages that need a login, open only if your
+  browser can reach them.
+
+## Tests
+
+`tests/overlay/` holds two test pages built from xpaths recorded on a real
+environment (both spellings), and scripts that check the overlay with a
+headless Chromium (Python Playwright):
+
+```bash
+python3 tests/overlay/run.py         # finds elements, builds areas at each detail level
+python3 tests/overlay/e2e.py         # real extension: app → new tab → overlay → reload
+python3 tests/overlay/frame_test.py  # same, from a sandboxed frame like the Dynatrace app
+```

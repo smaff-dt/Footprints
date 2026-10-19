@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Card, Checkbox, Dropdown, Option, Segmented } from "./components/Controls";
 import { RANK_LABELS, RankBy, rankSections, SectionDetail, SectionRanking } from "./components/SectionRanking";
+import { ShowOnPage } from "./components/ShowOnPage";
 import { Empty, ErrorNotice, Loading } from "./components/States";
 import { Device, Filters, GroupBy, Timeframe } from "./dql/queries";
 import { useApplications, usePages, usePageVisits, useSections } from "./hooks/data";
@@ -139,13 +140,27 @@ export function App() {
       </header>
 
       <main style={{ maxWidth: 1400, margin: "0 auto", padding: 24, display: "flex", flexDirection: "column", gap: 20 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em", overflowWrap: "anywhere" }}>
-            {activePage ? pageLabel(activePage) : "Choose a page"}
-          </h1>
-          <p style={{ margin: "4px 0 0", color: c.muted }}>
-            {activePage ? pageHost(activePage) : "Pick an application and one of its pages to see how visitors use it."}
-          </p>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+          <div style={{ minWidth: 0 }}>
+            <h1 style={{ margin: 0, fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em", overflowWrap: "anywhere" }}>
+              {activePage ? pageLabel(activePage) : "Choose a page"}
+            </h1>
+            <p style={{ margin: "4px 0 0", color: c.muted }}>
+              {activePage ? pageHost(activePage) : "Pick an application and one of its pages to see how visitors use it."}
+            </p>
+          </div>
+          {filters && activePage && (
+            <ShowOnPage
+              key={`${filters.appId}|${activePage}|${filters.timeframe}|${filters.device}`}
+              filters={filters}
+              page={activePage}
+              sampleUrl={pages.data?.find((p) => p.url === activePage)?.sample ?? ""}
+              appName={apps.data?.find((a) => a.id === appId)?.name ?? ""}
+              periodLabel={TIMEFRAMES.find((t) => t.value === timeframe)?.label ?? ""}
+              deviceLabel={device === "all" ? "All devices" : (DEVICES.find((d) => d.value === device)?.label ?? "")}
+              pageVisits={pageVisits}
+            />
+          )}
         </div>
 
         <Card label="Filters" style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 20 }}>

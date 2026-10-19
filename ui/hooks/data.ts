@@ -63,14 +63,22 @@ export function useApplications(): QueryState<Application[]> {
 // ── Pages ────────────────────────────────────────────────────────────────────
 
 export interface PageSummary {
+  /** The page template, e.g. https://site/journeys/*\/book */
   url: string;
+  /** One real address of that page, used to open it in the browser. */
+  sample: string;
   clicks: number;
   visits: number;
 }
 
 function mapPages(rows: Row[]): PageSummary[] {
   return rows
-    .map((r) => ({ url: str(r["page_template"]), clicks: num(r["clicks"]), visits: num(r["visits"]) }))
+    .map((r) => ({
+      url: str(r["page_template"]),
+      sample: str(r["sample"]),
+      clicks: num(r["clicks"]),
+      visits: num(r["visits"]),
+    }))
     .filter((p) => p.url);
 }
 
@@ -111,6 +119,38 @@ function mapElements(rows: Row[]): Section[] {
     clicks: num(r["clicks"]),
     visits: num(r["visits"]),
   }));
+}
+
+// ── Data for the browser extension ───────────────────────────────────────────
+
+export interface PageElement {
+  /** The xpath as recorded by Dynatrace, one segment per item. */
+  xpath: string[];
+  clicks: number;
+  visits: number;
+  label: string;
+}
+
+/** Every clicked element of a page, for drawing on the live page. */
+export async function loadPageElements(filters: Filters, page: string): Promise<PageElement[]> {
+  const rows = await runQuery(sectionsQuery(filters, page, "elements"));
+  const out: PageElement[] = [];
+  for (const r of rows) {
+    let xpath: unknown;
+    try {
+      xpath = JSON.parse(str(r["section"]));
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(xpath) || xpath.length === 0) continue;
+    out.push({
+      xpath: xpath.map(String),
+      clicks: num(r["clicks"]),
+      visits: num(r["visits"]),
+      label: elementLabel(str(r["name"]), str(r["node"]), str(r["tag"])),
+    });
+  }
+  return out;
 }
 
 export function useSections(

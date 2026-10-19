@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Book journey</title>
+<style>
+body{margin:0;font-family:Arial,sans-serif;background:#f3f4f6}
+app-root,app-book-journey,app-main-layout,app-header,app-login-form,app-billing{display:block}
+header{background:#1f2a44;color:#fff;padding:18px 40px;display:flex;justify-content:space-between}
+nav a{color:#fff;margin-left:20px}
+main{display:grid;grid-template-columns:1fr 1.4fr;gap:24px;padding:24px 40px}
+.card{background:#fff;border-radius:8px;padding:20px;margin-bottom:20px}
+input,button{padding:10px;margin:6px}
+</style></head>
+<body>
+<app-root><app-book-journey><app-main-layout>
+  <div>
+    <app-header><header><span>easyTravel</span><nav><a href="#">Offers</a><a id="header:logout" href="#">Logout</a></nav></header></app-header>
+    <div>
+      <main>
+        <div class="card"><h2>Your journey</h2><p>Paris, 4 nights</p><img alt="" style="width:100%;height:180px;background:#ddd;display:block"></div>
+        <div>
+          <app-login-form><form class="card"><h2>Sign in</h2>
+            <div><input id="loginForm:username" placeholder="Username"></div>
+            <input id="loginForm:password" type="password" placeholder="Password">
+            <button id="loginForm:submit" type="button">Login</button>
+          </form></app-login-form>
+          <div class="card"><p>Step 1</p><p>Step 2</p><p>Review your trip <button type="button">Next</button></p></div>
+          <app-billing><div class="card"><div>
+            <h2>Payment <div style="display:inline-block"><fa-icon style="display:inline-block;width:20px;height:20px;background:#999"></fa-icon></div></h2>
+            <div><input placeholder="Card number"></div><div><input placeholder="Name"></div><div><button type="button">Pay now</button></div>
+          </div></div></app-billing>
+          <div class="card"><button id="summaryButton" type="button">Summary</button></div>
+        </div>
+      </main>
+    </div>
+  </div>
+</app-main-layout></app-book-journey></app-root>
+</body></html>
