@@ -23,11 +23,17 @@ export function dqlString(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
-const APP_ID_PATTERN = /^APPLICATION-[A-F0-9]+$/;
+/**
+ * The application a user event belongs to. Newer environments name it in
+ * `frontend.name`; older ones only carry the entity id in
+ * `dt.rum.application.entity`. Fields that do not exist evaluate to null,
+ * so the same expression works on both.
+ */
+const APP_EXPR = "coalesce(frontend.name, dt.rum.application.entity)";
 
 function appFilter(appId: string): string {
-  if (!APP_ID_PATTERN.test(appId)) throw new Error(`Invalid application id: ${appId}`);
-  return `| filter dt.rum.application.entity == ${dqlString(appId)}`;
+  if (!appId) throw new Error("No application selected");
+  return `| filter ${APP_EXPR} == ${dqlString(appId)}`;
 }
 
 function fromClause(timeframe: Timeframe): string {
@@ -67,24 +73,32 @@ function lines(...parts: string[]): string {
 
 // ── Queries ──────────────────────────────────────────────────────────────────
 
-/** RUM applications for the application picker. */
+/**
+ * Applications for the picker: those that received clicks in the last 7 days,
+ * busiest first. Applications without clicks have nothing to show.
+ */
 export function applicationsQuery(): string {
   return lines(
-    "fetch dt.entity.application, from:now()-24h",
-    "| fields id, entity.name",
-    "| sort entity.name asc",
+    "fetch user.events, from:now()-7d",
+    CLICKS_ONLY,
+    `| fieldsAdd app = ${APP_EXPR}`,
+    "| filter isNotNull(app)",
+    "| summarize clicks = count(), by: {app}",
+    "| sort clicks desc",
     "| limit 200",
   );
 }
 
-/** Fallback when the entity list is empty: applications seen in user events. */
-export function applicationsFromEventsQuery(): string {
+/**
+ * Readable names for older environments, where `app` above is an entity id
+ * (APPLICATION-…). This data object does not exist on newer environments;
+ * callers treat a failure as "no names available".
+ */
+export function applicationNamesQuery(): string {
   return lines(
-    "fetch user.events, from:now()-24h",
-    "| filter isNotNull(dt.rum.application.entity)",
-    "| summarize events = count(), by: {id = dt.rum.application.entity}",
-    "| sort events desc",
-    "| limit 200",
+    "fetch dt.entity.application, from:now()-7d",
+    "| fields id, entity.name",
+    "| limit 500",
   );
 }
 

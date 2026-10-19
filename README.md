@@ -57,7 +57,8 @@ user on a snapshot of the page, which works on any site.
 - Fields used: `characteristics.has_user_interaction`, `interaction.type`,
   `ui_element.xpath`, `ui_element.name`, `ui_element.tag_name`,
   `view.url.full`, `page.url.full`, `browser.window.width`,
-  `dt.rum.application.entity`, `dt.rum.session.id`. Several of these are marked
+  `frontend.name` (or `dt.rum.application.entity` on older environments),
+  `dt.rum.session.id`. Several of these are marked
   *experimental* in the Semantic Dictionary and may change.
 
 ## Permissions
@@ -66,7 +67,7 @@ user on a snapshot of the page, which works on any site.
 |---|---|
 | `storage:user.events:read` | Clicks and page views |
 | `storage:buckets:read` | Required with the table permission to read Grail |
-| `storage:entities:read` | Application list for the picker |
+| `storage:entities:read` | Application names on older environments, where events only carry an entity id |
 
 ## Develop and deploy
 

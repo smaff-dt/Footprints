@@ -178,7 +178,7 @@ export function App() {
           <Card>
             <Empty
               title="No applications found"
-              detail="Footprints did not find any monitored web application on this environment."
+              detail="No web application received clicks in the last 7 days. Ask your Dynatrace administrator to turn on user interaction capture for the applications you want to analyse."
             />
           </Card>
         )}

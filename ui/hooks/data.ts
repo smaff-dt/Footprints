@@ -5,7 +5,7 @@
 import { useEffect, useState } from "react";
 import { num, runQuery, Row, str } from "../dql/client";
 import {
-  applicationsFromEventsQuery,
+  applicationNamesQuery,
   applicationsQuery,
   Filters,
   GroupBy,
@@ -23,6 +23,8 @@ export interface Application {
   name: string;
 }
 
+const ENTITY_ID = /^APPLICATION-[A-F0-9]+$/;
+
 export function useApplications(): QueryState<Application[]> {
   const [state, setState] = useState<QueryState<Application[]>>({ data: null, loading: true, error: null });
 
@@ -30,14 +32,22 @@ export function useApplications(): QueryState<Application[]> {
     const controller = new AbortController();
     (async () => {
       try {
-        let apps = (await runQuery(applicationsQuery(), controller.signal))
-          .map((r) => ({ id: str(r["id"]), name: str(r["entity.name"]) }))
-          .filter((a) => a.id && a.name);
-        if (apps.length === 0) {
-          apps = (await runQuery(applicationsFromEventsQuery(), controller.signal))
-            .map((r) => ({ id: str(r["id"]), name: str(r["id"]) }))
-            .filter((a) => a.id);
+        const ids = (await runQuery(applicationsQuery(), controller.signal)).map((r) => str(r["app"])).filter(Boolean);
+
+        // Older environments identify applications by entity id: look up names.
+        let names = new Map<string, string>();
+        if (ids.some((id) => ENTITY_ID.test(id))) {
+          try {
+            const rows = await runQuery(applicationNamesQuery(), controller.signal);
+            names = new Map(rows.map((r) => [str(r["id"]), str(r["entity.name"])]));
+          } catch {
+            // No entity model on this environment: show the ids as they are.
+          }
         }
+
+        const apps = ids
+          .map((id) => ({ id, name: names.get(id) || id }))
+          .sort((a, b) => a.name.localeCompare(b.name));
         if (!controller.signal.aborted) setState({ data: apps, loading: false, error: null });
       } catch (err: unknown) {
         if (controller.signal.aborted) return;

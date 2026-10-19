@@ -24,7 +24,16 @@ export function ErrorNotice(props: { title: string; detail: string; onRetry?: ()
   return (
     <div role="alert" style={{ padding: "14px 16px", borderRadius: 12, background: c.warnSoft, color: c.warnInk }}>
       <div style={{ fontWeight: 700 }}>{props.title}</div>
-      <div style={{ fontSize: 14, marginTop: 4, wordBreak: "break-word" }}>{props.detail}</div>
+      <div style={{ fontSize: 14, marginTop: 4 }}>
+        Please try again in a moment. If it keeps happening, share the technical details below with your Dynatrace
+        administrator.
+      </div>
+      <details style={{ marginTop: 8, fontSize: 13 }}>
+        <summary style={{ cursor: "pointer", fontWeight: 600 }}>Technical details</summary>
+        <div style={{ marginTop: 6, wordBreak: "break-word", fontFamily: "ui-monospace, Menlo, monospace" }}>
+          {props.detail}
+        </div>
+      </details>
       {props.onRetry && (
         <button
           type="button"
