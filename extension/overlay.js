@@ -454,7 +454,16 @@
 
     const foundClicks = state.found.reduce((s, f) => s + f.row.clicks, 0);
     const notes = [];
-    if (state.missing.length) {
+    const looksLikeError = /\b(403|404|500|502|503|forbidden|not found|access denied|unauthori[sz]ed)\b/i.test(
+      `${document.title} ${(document.body && document.body.innerText.slice(0, 300)) || ""}`,
+    );
+    if (state.found.length === 0 && state.missing.length) {
+      notes.push(
+        looksLikeError
+          ? "This page did not load: the website answered with an error (for example “403 Forbidden”). Your browser may not be allowed to reach it — try from the company network or VPN."
+          : "None of the clicked elements is on this page. It may be a login page, a different version of the site, or a page that did not finish loading.",
+      );
+    } else if (state.missing.length) {
       notes.push(
         `${pct(pageClicks - foundClicks, pageClicks)} of the clicks are on elements that are not on screen now (menus, pop-ups, or content that changed).`,
       );
