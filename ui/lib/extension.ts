@@ -57,7 +57,7 @@ export function showOnPage(payload: PagePayload, timeoutMs = 8000): Promise<void
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
       window.removeEventListener("message", onMessage);
-      reject(new Error("The browser extension did not answer."));
+      reject(new Error("The browser extension did not answer. If you just installed or updated it, reload this page (Cmd/Ctrl + R) and try again."));
     }, timeoutMs);
     function onMessage(event: MessageEvent) {
       if (event.source !== window || !isExtensionMessage(event.data)) return;

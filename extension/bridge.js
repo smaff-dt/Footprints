@@ -24,10 +24,21 @@
     }
 
     if (data.type === "show") {
-      chrome.runtime.sendMessage({ type: "footprints:open", payload: data.payload }, (response) => {
-        const error = chrome.runtime.lastError ? chrome.runtime.lastError.message : response && response.error;
-        reply({ type: "shown", requestId: data.requestId, ok: !error && !!(response && response.ok), error: error || null });
-      });
+      try {
+        chrome.runtime.sendMessage({ type: "footprints:open", payload: data.payload }, (response) => {
+          const error = chrome.runtime.lastError ? chrome.runtime.lastError.message : response && response.error;
+          reply({ type: "shown", requestId: data.requestId, ok: !error && !!(response && response.ok), error: error || null });
+        });
+      } catch (err) {
+        // After the extension is updated or reloaded, bridges in tabs that were
+        // already open are cut off from it until the tab is reloaded.
+        reply({
+          type: "shown",
+          requestId: data.requestId,
+          ok: false,
+          error: "The Footprints extension was updated. Reload this page (Cmd/Ctrl + R) and try again.",
+        });
+      }
     }
   });
 
