@@ -1,0 +1,23 @@
+{
+  "name": "footprints",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Footprints – see which parts of a page your visitors use, powered by Dynatrace RUM data",
+  "scripts": {
+    "start": "dt-app dev",
+    "build": "dt-app build",
+    "deploy": "dt-app deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@dynatrace-sdk/client-query": "^1.27.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "dt-app": "^1.19.1",
+    "typescript": "^5.4.0"
+  }
+}
