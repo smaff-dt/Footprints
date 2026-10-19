@@ -1,5 +1,5 @@
 {
-  "environmentUrl": "https://YOUR-TENANT.apps.dynatrace.com",
+  "environmentUrl": "https://wyq34449.sprint.apps.dynatracelabs.com",
   "build": {
     "index": "ui/index.html",
     "sourceRoot": "./"
