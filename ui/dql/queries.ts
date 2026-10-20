@@ -71,7 +71,8 @@ function deviceFilter(device: Device): string {
  * `view.url.full` follows route changes in single-page apps; `page.url.full`
  * is the fallback for classic multi-page sites.
  */
-const URL_EXPR = `splitString(coalesce(view.url.full, page.url.full), "?")[0]`;
+// The address without query string ("?…") and fragment ("#…").
+const URL_EXPR = `splitString(splitString(coalesce(view.url.full, page.url.full), "?")[0], "#")[0]`;
 /**
  * Ways to turn an address into a page template, best first: a path segment
  * that contains a digit (`/product/OLJCESPC7Z`, `/order/12345`) becomes `*`.
