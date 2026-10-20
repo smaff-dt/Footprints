@@ -5,32 +5,37 @@
  * by `queries.ts`; nothing in the UI ever shows DQL to the user.
  */
 import { queryExecutionClient } from "@dynatrace-sdk/client-query";
-import { SIMPLE_PAGE_EXPR, SMART_PAGE_EXPR } from "./queries";
+import { PAGE_EXPRS } from "./queries";
 
 export type Row = Record<string, unknown>;
 
 const MAX_POLLS = 30;
 
 /**
- * Runs a query. If the environment rejects the pattern that groups pages by
- * identifier, it is replaced by the numbers-only pattern, here and for every
- * later query.
+ * Runs a query. If the environment rejects the pattern that turns addresses
+ * into page templates, the next pattern in PAGE_EXPRS is used, here and for
+ * every later query.
  */
 export async function runQuery(query: string, signal?: AbortSignal): Promise<Row[]> {
-  const q = smartPagesRejected ? query.split(SMART_PAGE_EXPR).join(SIMPLE_PAGE_EXPR) : query;
-  try {
-    return await runQueryOnce(q, signal);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (!smartPagesRejected && q.includes(SMART_PAGE_EXPR) && /pattern|DPL|PARSE|SYNTAX/i.test(message)) {
-      smartPagesRejected = true;
-      return runQueryOnce(q.split(SMART_PAGE_EXPR).join(SIMPLE_PAGE_EXPR), signal);
+  for (;;) {
+    const level = pageExprLevel;
+    const q = level === 0 ? query : query.split(PAGE_EXPRS[0]).join(PAGE_EXPRS[level]);
+    try {
+      return await runQueryOnce(q, signal);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const usesPattern = query.includes(PAGE_EXPRS[0]);
+      if (usesPattern && level < PAGE_EXPRS.length - 1 && /pattern|DPL|PARSE|SYNTAX/i.test(message)) {
+        // Another query may already have moved on: never go back.
+        pageExprLevel = Math.max(pageExprLevel, level + 1);
+        continue;
+      }
+      throw err;
     }
-    throw err;
   }
 }
 
-let smartPagesRejected = false;
+let pageExprLevel = 0;
 
 async function runQueryOnce(query: string, signal?: AbortSignal): Promise<Row[]> {
   const start = await queryExecutionClient.queryExecute({

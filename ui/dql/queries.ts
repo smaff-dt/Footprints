@@ -72,9 +72,19 @@ function deviceFilter(device: Device): string {
  * is the fallback for classic multi-page sites.
  */
 const URL_EXPR = `splitString(coalesce(view.url.full, page.url.full), "?")[0]`;
-export const SMART_PAGE_EXPR = `replacePattern(${URL_EXPR}, "'/' ALPHA* DIGIT (ALNUM | '_' | '-')*", "/*")`;
-export const SIMPLE_PAGE_EXPR = `replacePattern(${URL_EXPR}, "'/' DIGIT+", "/*")`;
-const PAGE_EXPR = SMART_PAGE_EXPR;
+/**
+ * Ways to turn an address into a page template, best first: a path segment
+ * that contains a digit (`/product/OLJCESPC7Z`, `/order/12345`) becomes `*`.
+ * Pattern support differs between environments, so the client falls back to
+ * the next one when an environment rejects a pattern; the last one (numbers
+ * only) works everywhere.
+ */
+export const PAGE_EXPRS = [
+  `replacePattern(${URL_EXPR}, "'/' [a-zA-Z_-]{0,200} DIGIT [a-zA-Z0-9_-]{0,200}", "/*")`,
+  `replacePattern(${URL_EXPR}, "'/' ALPHA* DIGIT ALNUM*", "/*")`,
+  `replacePattern(${URL_EXPR}, "'/' DIGIT+", "/*")`,
+];
+const PAGE_EXPR = PAGE_EXPRS[0];
 
 /** Keeps the events of the chosen page, or of every page of a group. */
 function pagesFilter(pages: string[]): string {
