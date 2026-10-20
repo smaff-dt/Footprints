@@ -36,7 +36,8 @@ async function openWithOverlay(payload, sender) {
     throw new Error("The page address is missing or is not a web address.");
   }
   if (!Array.isArray(payload.elements)) throw new Error("No click data was received.");
-  const tab = await chrome.tabs.create({ url: payload.url, active: true });
+  // Open next to Footprints, in the same window (also when that is an incognito window).
+  const tab = await chrome.tabs.create({ url: payload.url, active: true, ...(sender.tab ? { windowId: sender.tab.windowId } : {}) });
   await chrome.storage.session.set({
     [PAGE(tab.id)]: payload,
     [OPENER(tab.id)]: sender.tab ? { tabId: sender.tab.id, frameId: sender.frameId || 0 } : null,
