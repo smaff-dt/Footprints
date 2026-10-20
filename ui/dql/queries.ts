@@ -130,6 +130,12 @@ export function pageVisitsQuery(f: Filters, page: string): string {
   );
 }
 
+/**
+ * Adds `pos_y`: the "y" of the event's (first) position, read from the text
+ * of `positions`, e.g. {"x":0,"y":1585,"start_time":516} or [{"x":"952","y":"669"}].
+ */
+const POSITION_Y = String.raw`| parse toString(positions), "LD '\"y\"' SPACE? ':' SPACE? '\"'? INT:pos_y"`;
+
 /** Width of one step of the scroll-depth distribution, in pixels. */
 export const SCROLL_STEP = 50;
 
@@ -144,18 +150,20 @@ export const SCROLL_STEP = 50;
  * - A click records where it happened on the page, which was on screen.
  * - Any other event means the visit saw at least the first screen.
  *
- * `positions` is an array on some events and a single record on others,
- * and its numbers can arrive as text: the expression handles all of these.
+ * `positions` is an array on some events and a single record on others, and
+ * its numbers can arrive as text. Direct field access returned nothing on a
+ * real environment, so the value of "y" is read from the field's text form,
+ * which works for every one of these shapes.
  */
 export function scrollDepthQuery(f: Filters, page: string): string {
-  const y = "toDouble(coalesce(arrayLast(positions)[y], positions[y]))";
   return lines(
     `fetch user.events, ${fromClause(f.timeframe)}`,
     appFilter(f.appId),
     deviceFilter(f.device),
     `| fieldsAdd page_template = ${PAGE_EXPR}`,
     `| filter page_template == ${dqlString(page)}`,
-    "| fieldsAdd window_h = toDouble(browser.window.height), pos_y = " + y,
+    POSITION_Y,
+    "| fieldsAdd window_h = toDouble(browser.window.height), pos_y = toDouble(pos_y)",
     "| fieldsAdd page_scroll = interaction.type == \"scroll\" and (isNull(ui_element.tag_name) or ui_element.tag_name == \"html\" or ui_element.tag_name == \"body\")",
     // Each kind of evidence on its own field, so a missing value never hides another.
     "| fieldsAdd scroll_seen = if(page_scroll == true, pos_y + window_h), click_seen = if(interaction.type == \"click\", pos_y)",
