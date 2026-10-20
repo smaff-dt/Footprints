@@ -131,10 +131,18 @@ export function pageVisitsQuery(f: Filters, page: string): string {
 }
 
 /**
- * Adds `pos_y`: the "y" of the event's (first) position, read from the text
- * of `positions`, e.g. {"x":0,"y":1585,"start_time":516} or [{"x":"952","y":"669"}].
+ * Adds `pos_y`: the "y" of the event's first position.
+ *
+ * On a real environment `positions` is an array of JSON *strings*, e.g.
+ * ["{\"x\":0,\"y\":1585,\"start_time\":520}"]: its first element is plain JSON,
+ * read here first. Environments that store real records instead are covered
+ * by reading the text form of the whole field.
  */
-const POSITION_Y = String.raw`| parse toString(positions), "LD '\"y\"' SPACE? ':' SPACE? '\"'? INT:pos_y"`;
+const POSITION_Y = lines(
+  String.raw`| parse arrayFirst(positions), "LD '\"y\"' SPACE? ':' SPACE? '\"'? INT:pos_y_text"`,
+  String.raw`| parse toString(positions), "LD '\"y\"' SPACE? ':' SPACE? '\"'? INT:pos_y_record"`,
+  "| fieldsAdd pos_y = coalesce(pos_y_text, pos_y_record)",
+);
 
 /** Width of one step of the scroll-depth distribution, in pixels. */
 export const SCROLL_STEP = 50;
