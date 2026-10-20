@@ -9,14 +9,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, Checkbox, Dropdown, Option, Segmented } from "./components/Controls";
 import { RANK_LABELS, RankBy, rankSections, SectionDetail, SectionRanking } from "./components/SectionRanking";
+import { GroupEditor, PagePicker } from "./components/PagePicker";
 import { ShowOnPage } from "./components/ShowOnPage";
 import { SnapshotPanel } from "./components/SnapshotPanel";
 import { Empty, ErrorNotice, Loading } from "./components/States";
 import { Device, Filters, GroupBy, Timeframe } from "./dql/queries";
 import { useApplications, usePages, usePageVisits, useSections } from "./hooks/data";
 import { formatInt } from "./lib/format";
-import { pageHost, pageLabel } from "./lib/labels";
+import { pageHost } from "./lib/labels";
 import { useSnapshotInbox } from "./lib/extension";
+import { choicesFor, labelForKey, loadGroups, newGroupId, PageGroup, storeGroups, StoredGroups } from "./lib/pages";
 import { saveSnapshot, Snapshot } from "./lib/snapshots";
 import { usePersistentState } from "./lib/storage";
 import { c, GLOBAL_CSS } from "./theme";
@@ -63,6 +65,15 @@ export function App() {
   const [view, setView] = usePersistentState<View>("fp.view", "map");
   const [inbox, setInbox] = useState<{ tick: number; id: string | null }>({ tick: 0, id: null });
   const [savedNote, setSavedNote] = useState<string | null>(null);
+  const [groups, setGroups] = useState<StoredGroups>({ groups: [], docId: null, version: null });
+  const [editing, setEditing] = useState<{ group: PageGroup | null } | null>(null);
+  const [groupSaving, setGroupSaving] = useState(false);
+  const [groupError, setGroupError] = useState<string | null>(null);
+
+  // Page groups are kept in a private document.
+  useEffect(() => {
+    loadGroups().then(setGroups, (e: unknown) => setGroupError(`Could not load your page groups: ${e instanceof Error ? e.message : String(e)}`));
+  }, []);
 
   // Applications
   const apps = useApplications();
@@ -77,33 +88,66 @@ export function App() {
     [appId, timeframe, device, apps.data],
   );
 
-  // Pages
+  // Pages and page groups
   const pages = usePages(filters, refreshKey);
+  const choices = useMemo(() => choicesFor(pages.data ?? [], groups.groups, appId), [pages.data, groups.groups, appId]);
   useEffect(() => {
-    if (pages.data && pages.data.length > 0 && !pages.data.some((p) => p.url === page)) {
-      setPage(pages.data[0].url);
+    if (pages.data && choices.length > 0 && !choices.some((ch) => ch.key === page)) {
+      const firstPage = choices.find((ch) => ch.kind === "page") ?? choices[0];
+      setPage(firstPage.key);
     }
-  }, [pages.data, page, setPage]);
-  const pageReady = !!pages.data?.some((p) => p.url === page);
-  const activePage = pageReady ? page : null;
+  }, [pages.data, choices, page, setPage]);
+  const choice = choices.find((ch) => ch.key === page && ch.templates.length > 0) ?? null;
+  const activePage = choice ? choice.key : null;
+  const templates = useMemo(() => choice?.templates ?? null, [choice]);
+
+  async function saveGroup(g: Omit<PageGroup, "id"> & { id?: string }) {
+    setGroupSaving(true);
+    setGroupError(null);
+    try {
+      const group: PageGroup = { ...g, id: g.id ?? newGroupId() };
+      const next = g.id ? groups.groups.map((x) => (x.id === g.id ? group : x)) : [...groups.groups, group];
+      setGroups(await storeGroups(groups, next));
+      setPage(`group:${group.id}`);
+      setEditing(null);
+    } catch (e) {
+      setGroupError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGroupSaving(false);
+    }
+  }
+
+  async function deleteGroup(g: PageGroup) {
+    setGroupSaving(true);
+    setGroupError(null);
+    try {
+      setGroups(await storeGroups(groups, groups.groups.filter((x) => x.id !== g.id)));
+      setEditing(null);
+    } catch (e) {
+      setGroupError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGroupSaving(false);
+    }
+  }
 
   // Snapshots arriving from the browser extension are saved as documents.
   const onSnapshot = useCallback(async (snapshot: Snapshot) => {
-    const id = await saveSnapshot(snapshot, pageLabel(snapshot.page));
+    const label = labelForKey(snapshot.page, groups.groups);
+    const id = await saveSnapshot(snapshot, label);
     setInbox((i) => ({ tick: i.tick + 1, id }));
-    setSavedNote(`Snapshot of “${pageLabel(snapshot.page)}” saved.`);
+    setSavedNote(`Snapshot of “${label}” saved.`);
     if (snapshot.appId && snapshot.page) {
       setAppId(snapshot.appId);
       setPage(snapshot.page);
       setView("map");
     }
     return id;
-  }, [setAppId, setPage, setView]);
+  }, [setAppId, setPage, setView, groups.groups]);
   useSnapshotInbox(onSnapshot);
 
   // One page
-  const visits = usePageVisits(filters, activePage, refreshKey);
-  const sections = useSections(filters, view === "list" ? activePage : null, groupBy, refreshKey);
+  const visits = usePageVisits(filters, templates, refreshKey);
+  const sections = useSections(filters, view === "list" ? templates : null, groupBy, refreshKey);
 
   useEffect(() => setSelectedKey(null), [appId, page, groupBy]);
 
@@ -116,12 +160,6 @@ export function App() {
   const hiddenCount = ranked.length - shown.length;
   const selected = shown.find((s) => s.key === selectedKey) ?? shown[0] ?? null;
   const totalClicks = ranked.reduce((sum, s) => sum + s.clicks, 0);
-
-  const multiHost = new Set((pages.data ?? []).map((p) => pageHost(p.url))).size > 1;
-  const pageOptions: Option<string>[] = (pages.data ?? []).map((p) => ({
-    value: p.url,
-    label: `${pageLabel(p.url)}${multiHost ? ` (${pageHost(p.url)})` : ""} — ${formatInt(p.visits)} visits`,
-  }));
 
   const noun = groupBy === "sections" ? "sections" : "elements";
 
@@ -172,18 +210,23 @@ export function App() {
         <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
           <div style={{ minWidth: 0 }}>
             <h1 style={{ margin: 0, fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em", overflowWrap: "anywhere" }}>
-              {activePage ? pageLabel(activePage) : "Choose a page"}
+              {choice ? choice.label : "Choose a page"}
             </h1>
             <p style={{ margin: "4px 0 0", color: c.muted }}>
-              {activePage ? pageHost(activePage) : "Pick an application and one of its pages to see how visitors use it."}
+              {choice
+                ? choice.kind === "group"
+                  ? `Page group · ${choice.templates.length} page${choice.templates.length === 1 ? "" : "s"} · ${pageHost(choice.sample || choice.templates[0])}`
+                  : pageHost(choice.key)
+                : "Pick an application and one of its pages to see how visitors use it."}
             </p>
           </div>
-          {filters && activePage && (
+          {filters && choice && (
             <ShowOnPage
-              key={`${filters.appId}|${activePage}|${filters.timeframe}|${filters.device}`}
+              key={`${filters.appId}|${choice.key}|${filters.timeframe}|${filters.device}`}
               filters={filters}
-              page={activePage}
-              sampleUrl={pages.data?.find((p) => p.url === activePage)?.sample ?? ""}
+              page={choice.key}
+              templates={choice.templates}
+              sampleUrl={choice.sample}
               appName={apps.data?.find((a) => a.id === appId)?.name ?? ""}
               periodLabel={TIMEFRAMES.find((t) => t.value === timeframe)?.label ?? ""}
               deviceLabel={device === "all" ? "All devices" : (DEVICES.find((d) => d.value === device)?.label ?? "")}
@@ -201,19 +244,38 @@ export function App() {
             onChange={setAppId}
             disabled={!apps.data || apps.data.length === 0}
           />
-          <Dropdown
-            label="Page"
-            wide
-            value={pageReady ? page : ""}
-            placeholder={pages.loading ? "Loading pages…" : "Choose a page"}
-            options={pageOptions}
+          <PagePicker
+            choices={choices}
+            value={page}
+            loading={pages.loading}
             onChange={setPage}
-            disabled={pageOptions.length === 0}
+            onNewGroup={() => {
+              setGroupError(null);
+              setEditing({ group: null });
+            }}
+            onEditGroup={(group) => {
+              setGroupError(null);
+              setEditing({ group });
+            }}
           />
           <Dropdown label="Period" value={timeframe} options={TIMEFRAMES} onChange={setTimeframe} />
           <Segmented label="Device" value={device} options={DEVICES} onChange={setDevice} />
         </Card>
 
+        {editing && filters && (
+          <GroupEditor
+            key={editing.group?.id ?? "new"}
+            group={editing.group}
+            appId={filters.appId}
+            pages={pages.data ?? []}
+            saving={groupSaving}
+            error={groupError}
+            onSave={saveGroup}
+            onDelete={deleteGroup}
+            onCancel={() => setEditing(null)}
+          />
+        )}
+        {!editing && groupError && <ErrorNotice title="Page groups" detail={groupError} />}
         {savedNote && (
           <div role="status" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "12px 16px", borderRadius: 12, background: c.accentSoft, color: c.ink, fontWeight: 600 }}>
             {savedNote}
@@ -269,6 +331,7 @@ export function App() {
                 <SnapshotPanel
                   filters={filters}
                   page={activePage}
+                  templates={templates ?? []}
                   pageVisits={pageVisits}
                   refreshKey={refreshKey}
                   inboxTick={inbox.tick}

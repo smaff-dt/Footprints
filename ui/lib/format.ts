@@ -13,3 +13,14 @@ export function formatPct(ratio: number): string {
 export function formatAvg(n: number): string {
   return n.toFixed(1);
 }
+
+export function formatWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+export function deviceName(device: string): string {
+  const names: Record<string, string> = { desktop: "Desktop", tablet: "Tablet", mobile: "Mobile", all: "Desktop" };
+  return names[device] ?? device;
+}

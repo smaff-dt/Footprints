@@ -94,8 +94,8 @@ function mapVisits(rows: Row[]): number {
   return num(rows[0]?.["visits"]);
 }
 
-export function usePageVisits(filters: Filters | null, page: string | null, refreshKey: number): QueryState<number> {
-  return useQuery(filters && page ? pageVisitsQuery(filters, page) : null, mapVisits, refreshKey);
+export function usePageVisits(filters: Filters | null, pages: string[] | null, refreshKey: number): QueryState<number> {
+  return useQuery(filters && pages && pages.length ? pageVisitsQuery(filters, pages) : null, mapVisits, refreshKey);
 }
 
 export interface Section {
@@ -134,16 +134,16 @@ export interface PageElement {
 }
 
 /** Every clicked element of a page, for drawing on the live page. */
-export async function loadPageElements(filters: Filters, page: string): Promise<PageElement[]> {
-  return mapPageElements(await runQuery(sectionsQuery(filters, page, "elements")));
+export async function loadPageElements(filters: Filters, pages: string[]): Promise<PageElement[]> {
+  return mapPageElements(await runQuery(sectionsQuery(filters, pages, "elements")));
 }
 
-export function usePageElements(filters: Filters | null, page: string | null, refreshKey: number): QueryState<PageElement[]> {
-  return useQuery(filters && page ? sectionsQuery(filters, page, "elements") : null, mapPageElements, refreshKey);
+export function usePageElements(filters: Filters | null, pages: string[] | null, refreshKey: number): QueryState<PageElement[]> {
+  return useQuery(filters && pages && pages.length ? sectionsQuery(filters, pages, "elements") : null, mapPageElements, refreshKey);
 }
 
-export function useScrollDepth(filters: Filters | null, page: string | null, refreshKey: number): QueryState<ScrollDepth> {
-  return useQuery(filters && page ? scrollDepthQuery(filters, page) : null, mapScrollDepth, refreshKey);
+export function useScrollDepth(filters: Filters | null, pages: string[] | null, refreshKey: number): QueryState<ScrollDepth> {
+  return useQuery(filters && pages && pages.length ? scrollDepthQuery(filters, pages) : null, mapScrollDepth, refreshKey);
 }
 
 function mapPageElements(rows: Row[]): PageElement[] {
@@ -176,8 +176,8 @@ export interface ScrollDepth {
 }
 
 /** How far down the page visits got, for exposure on the live page. */
-export async function loadScrollDepth(filters: Filters, page: string): Promise<ScrollDepth> {
-  return mapScrollDepth(await runQuery(scrollDepthQuery(filters, page)));
+export async function loadScrollDepth(filters: Filters, pages: string[]): Promise<ScrollDepth> {
+  return mapScrollDepth(await runQuery(scrollDepthQuery(filters, pages)));
 }
 
 function mapScrollDepth(rows: Row[]): ScrollDepth {
@@ -190,10 +190,10 @@ function mapScrollDepth(rows: Row[]): ScrollDepth {
 
 export function useSections(
   filters: Filters | null,
-  page: string | null,
+  pages: string[] | null,
   groupBy: GroupBy,
   refreshKey: number,
 ): QueryState<Section[]> {
-  const query = filters && page ? sectionsQuery(filters, page, groupBy) : null;
+  const query = filters && pages && pages.length ? sectionsQuery(filters, pages, groupBy) : null;
   return useQuery(query, groupBy === "sections" ? mapSections : mapElements, refreshKey);
 }

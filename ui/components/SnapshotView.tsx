@@ -1,13 +1,14 @@
 /**
  * A saved snapshot with its numbers: the picture of the page, each area
- * colored by the chosen metric (only the number is drawn on the page), a card
- * that follows the pointer with the details, and a sidebar to rename areas.
+ * colored by the chosen metric (only the number is drawn on the page), and
+ * any element of the page — clicked or not — can be pointed at or selected to
+ * read its numbers. A sidebar ranks the areas and lets you rename them.
  * Numbers are recomputed from the current filters; the snapshot only stores
  * the picture and the map.
  */
-import { CSSProperties, KeyboardEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, KeyboardEvent, MouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import type { PageElement, ScrollDepth } from "../hooks/data";
-import { formatInt } from "../lib/format";
+import { deviceName, formatInt, formatWhen } from "../lib/format";
 import {
   AREA_METRICS,
   AreaMetric,
@@ -22,13 +23,11 @@ import {
   metricValue,
   startingDetail,
 } from "../lib/snapshotMath";
-import type { Snapshot } from "../lib/snapshots";
+import type { Box, Snapshot } from "../lib/snapshots";
 import { c } from "../theme";
 
-type Hover =
-  | { kind: "area"; stat: AreaStat; x: number; y: number }
-  | { kind: "element"; el: MatchedElement; x: number; y: number }
-  | null;
+type Target = { kind: "element"; index: number } | { kind: "area"; id: string };
+type Hover = (Target & { x: number; y: number }) | null;
 
 const HEAT = ["#F6D9A8", "#EE9B4D", "#B8461A"];
 
@@ -42,6 +41,16 @@ function pctOf(n: number, total: number): string {
   if (!total) return "–";
   const v = Math.min(100, (100 * n) / total);
   return v > 0 && v < 0.1 ? "<0.1%" : `${v.toFixed(v >= 10 ? 0 : 1)}%`;
+}
+
+/** Names taken from a line of text come in quotes: drop them for display. */
+function clean(name: string): string {
+  const m = /^“(.*)”$/.exec(name.trim());
+  return m ? m[1] : name;
+}
+
+function contains(b: Box, x: number, y: number): boolean {
+  return x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h;
 }
 
 export function SnapshotView(props: {
@@ -64,14 +73,17 @@ export function SnapshotView(props: {
   const [showLines, setShowLines] = useState(true);
   const [sidebar, setSidebar] = useState(true);
   const [hover, setHover] = useState<Hover>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [pinned, setPinned] = useState<Target | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // A new snapshot or new data: start again from a sensible detail level.
   useEffect(() => setDetail(startingDetail(map, matching)), [map, matching]);
-  const activeMetric: AreaMetric = !hasScroll && metric !== "share" ? "share" : metric;
+  useEffect(() => setPinned((p) => (p && p.kind === "area" ? null : p)), [detail]);
+  const metricOptions = AREA_METRICS.filter((m) => hasScroll || !m.needsScroll);
+  const activeMetric: AreaMetric = metricOptions.some((m) => m.value === metric) ? metric : "share";
 
   const stats = useMemo(() => areasAt(map, matching, detail), [map, matching, detail]);
+  const statById = useMemo(() => new Map(stats.map((s) => [s.area.id, s])), [stats]);
   const numbers = useMemo(
     () => new Map(stats.map((s) => [s.area.id, areaNumbers(s, matching.totalClicks, pageVisits, scroll)])),
     [stats, matching.totalClicks, pageVisits, scroll],
@@ -79,11 +91,11 @@ export function SnapshotView(props: {
   const valueOf = (s: AreaStat) => metricValue(numbers.get(s.area.id)!, activeMetric) ?? 0;
   const maxValue = Math.max(1e-9, ...stats.map(valueOf));
   const ranked = stats.slice().sort((a, b) => valueOf(b) - valueOf(a));
-  const nameOf = (s: AreaStat) => snapshot.names[s.area.key] || s.area.name;
+  const nameOf = (s: AreaStat) => snapshot.names[s.area.key] || clean(s.area.name);
 
   const W = map.page.w;
   const H = map.page.h;
-  const at = (b: { x: number; y: number; w: number; h: number }): CSSProperties => ({
+  const at = (b: Box): CSSProperties => ({
     left: `${(100 * b.x) / W}%`,
     top: `${(100 * b.y) / H}%`,
     width: `${(100 * b.w) / W}%`,
@@ -92,11 +104,53 @@ export function SnapshotView(props: {
 
   const matched = Array.from(matching.byElement.values());
   const maxClicks = Math.max(1, ...matched.map((m) => m.clicks));
-  const lines = hasScroll
-    ? [0.75, 0.5, 0.25]
-        .map((share) => ({ share, d: depthReachedBy(scroll, share) }))
-        .filter((l): l is { share: number; d: number } => l.d !== null && l.d > 0 && l.d < H)
-    : [];
+
+  // Scroll lines; lines that fall almost on top of each other share one label.
+  const lineGroups = useMemo(() => {
+    if (!hasScroll) return [];
+    const lines = [0.75, 0.5, 0.25]
+      .map((share) => ({ share, d: depthReachedBy(scroll, share) }))
+      .filter((l): l is { share: number; d: number } => l.d !== null && l.d > 0 && l.d < H);
+    const groups: { d: number; shares: number[] }[] = [];
+    for (const l of lines) {
+      const last = groups[groups.length - 1];
+      if (last && Math.abs(l.d - last.d) < Math.max(40, H * 0.015)) last.shares.push(l.share);
+      else groups.push({ d: l.d, shares: [l.share] });
+    }
+    return groups;
+  }, [hasScroll, scroll, H]);
+
+  /** The smallest element of the page under the pointer, clicked or not; else the smallest area. */
+  function targetAt(e: MouseEvent<HTMLDivElement>): Target | null {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width) * W;
+    const y = ((e.clientY - rect.top) / rect.height) * H;
+    let best = -1;
+    let bestSize = Infinity;
+    map.elements.forEach((el, i) => {
+      if (!contains(el.box, x, y)) return;
+      const size = el.box.w * el.box.h;
+      if (size < bestSize) {
+        best = i;
+        bestSize = size;
+      }
+    });
+    if (best >= 0) return { kind: "element", index: best };
+    let area: AreaStat | null = null;
+    for (const s of stats) if (contains(s.area.box, x, y) && (!area || s.area.box.w * s.area.box.h < area.area.box.w * area.area.box.h)) area = s;
+    return area ? { kind: "area", id: area.area.id } : null;
+  }
+
+  function sameTarget(a: Target | null, b: Target | null): boolean {
+    if (!a || !b) return a === b;
+    return a.kind === b.kind && (a.kind === "element" ? a.index === (b as typeof a).index : a.id === (b as typeof a).id);
+  }
+
+  function focusArea(id: string) {
+    setPinned({ kind: "area", id });
+    const node = canvasRef.current?.querySelector<HTMLElement>(`[data-area="${CSS.escape(id)}"]`);
+    node?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
 
   const coverage = matching.totalClicks ? matching.matchedClicks / matching.totalClicks : 1;
   const notes: string[] = [];
@@ -105,56 +159,56 @@ export function SnapshotView(props: {
       `Only ${pctOf(matching.matchedClicks, matching.totalClicks)} of this period's clicks are on elements of this snapshot. The page may have changed since it was taken: consider a new snapshot.`,
     );
   }
-  if (props.deviceKey !== "all" && snapshot.device && snapshot.device !== "all" && props.deviceKey !== snapshot.device) {
-    notes.push(`This snapshot shows the ${snapshot.device} page, but the data is for ${props.deviceKey}. Choose ${snapshot.device} in the filters.`);
-  } else if (props.deviceKey === "all" && hasScroll) {
+  if (props.deviceKey === "all" && hasScroll) {
     notes.push("“Seen by” mixes desktop and mobile visits, whose pages have different lengths. Choose one device for exact numbers.");
   }
   if (snapshot.truncated) notes.push("The page is very long: the snapshot stops at 16,000 pixels.");
 
-  function focusArea(id: string) {
-    setSelected(id);
-    const node = canvasRef.current?.querySelector<HTMLElement>(`[data-area="${CSS.escape(id)}"]`);
-    node?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
+  const hl = (t: Target | null): Box | null =>
+    !t ? null : t.kind === "element" ? map.elements[t.index]?.box ?? null : statById.get(t.id)?.area.box ?? null;
+  const hoverBox = hover && !sameTarget(hover, pinned) ? hl(hover) : null;
+  const pinnedBox = hl(pinned);
 
-  const taken = new Date(snapshot.capturedAt);
+  function cardFor(t: Target): ReactNode {
+    if (t.kind === "element") {
+      const el = map.elements[t.index];
+      return (
+        <ElementCard
+          name={el.name}
+          m={matching.byElement.get(t.index) ?? null}
+          seen={exposureOf(scroll, el.box)}
+          pageVisits={pageVisits}
+          totalClicks={matching.totalClicks}
+          area={(() => {
+            const id = el.chain.length ? el.chain[Math.min(detail, el.chain.length) - 1] : null;
+            const s = id ? statById.get(id) : undefined;
+            return s ? nameOf(s) : null;
+          })()}
+        />
+      );
+    }
+    const s = statById.get(t.id);
+    return s ? <AreaCard stat={s} name={nameOf(s)} numbers={numbers.get(s.area.id)!} snapshot={snapshot} pageVisits={pageVisits} /> : null;
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {/* Top bar: what to show */}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px 20px" }}>
-        <div role="group" aria-label="Metric" style={{ display: "flex", flexWrap: "wrap", padding: 3, gap: 3, borderRadius: 12, background: c.surfaceAlt }}>
-          {AREA_METRICS.map((m) => {
-            const disabled = m.needsScroll && !hasScroll;
-            const on = activeMetric === m.value;
-            return (
-              <button
-                key={m.value}
-                type="button"
-                disabled={disabled}
-                aria-pressed={on}
-                title={disabled ? "No scroll data for this page" : undefined}
-                onClick={() => setMetric(m.value)}
-                style={{
-                  minHeight: 38,
-                  padding: "0 14px",
-                  borderRadius: 9,
-                  border: 0,
-                  fontWeight: 700,
-                  fontSize: 14,
-                  cursor: disabled ? "not-allowed" : "pointer",
-                  opacity: disabled ? 0.45 : 1,
-                  background: on ? c.surface : "transparent",
-                  color: on ? c.ink : c.muted,
-                  boxShadow: on ? "0 1px 3px rgba(22,25,31,0.14)" : "none",
-                }}
-              >
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: c.muted }}>
+          Show
+          <select
+            value={activeMetric}
+            onChange={(e) => setMetric(e.target.value as AreaMetric)}
+            style={{ minHeight: 40, padding: "0 10px", borderRadius: 10, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.ink, fontWeight: 700 }}
+          >
+            {metricOptions.map((m) => (
+              <option key={m.value} value={m.value}>
                 {m.label}
-              </button>
-            );
-          })}
-        </div>
+              </option>
+            ))}
+          </select>
+        </label>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: c.muted }}>
           Detail
           <input
@@ -191,8 +245,9 @@ export function SnapshotView(props: {
       </div>
 
       <div style={{ fontSize: 13, color: c.muted }}>
-        Snapshot taken {Number.isNaN(taken.getTime()) ? snapshot.capturedAt : taken.toLocaleString()} · {snapshot.device} ·{" "}
-        {pctOf(matching.matchedClicks, matching.totalClicks)} of this period's clicks are on it
+        Snapshot of {formatWhen(snapshot.capturedAt)} · {deviceName(snapshot.device)} page
+        {props.deviceKey !== "all" ? ` · numbers from ${props.deviceKey} visits` : ""} · {pctOf(matching.matchedClicks, matching.totalClicks)} of this
+        period's clicks are on it · point at anything on the page, click to select it
         {props.saving ? " · saving names…" : ""}
       </div>
       {notes.map((n) => (
@@ -205,7 +260,16 @@ export function SnapshotView(props: {
         {/* The page */}
         <div
           ref={canvasRef}
+          onMouseMove={(e) => {
+            const t = targetAt(e);
+            setHover(t ? { ...t, x: e.clientX, y: e.clientY } : null);
+          }}
           onMouseLeave={() => setHover(null)}
+          onClick={(e) => {
+            const t = targetAt(e);
+            setPinned((p) => (sameTarget(p, t) ? null : t));
+            if (t) setSidebar(true);
+          }}
           style={{
             flex: "999 1 560px",
             minWidth: 0,
@@ -214,22 +278,21 @@ export function SnapshotView(props: {
             borderRadius: 10,
             overflow: "hidden",
             background: "#FFFFFF",
+            cursor: "crosshair",
           }}
         >
-          <img src={snapshot.image.dataUrl} alt={`Snapshot of ${snapshot.title || snapshot.url}`} style={{ display: "block", width: "100%", height: "auto" }} />
+          <img src={snapshot.image.dataUrl} alt={`Snapshot of ${snapshot.title || snapshot.url}`} draggable={false} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} />
           {stats
             .slice()
             .sort((a, b) => b.area.box.w * b.area.box.h - a.area.box.w * a.area.box.h)
             .map((s) => {
               const r = valueOf(s) / maxValue;
               const h = heat(r);
-              const isSel = selected === s.area.id;
+              const isSel = pinned?.kind === "area" && pinned.id === s.area.id;
               return (
                 <div
                   key={s.area.id}
                   data-area={s.area.id}
-                  onMouseMove={(e) => setHover({ kind: "area", stat: s, x: e.clientX, y: e.clientY })}
-                  onClick={() => setSelected(isSel ? null : s.area.id)}
                   style={{
                     position: "absolute",
                     ...at(s.area.box),
@@ -237,7 +300,7 @@ export function SnapshotView(props: {
                     borderRadius: 6,
                     border: isSel ? "3px solid #2F4BD8" : "2px solid rgba(184,70,26,0.75)",
                     background: `rgba(232,116,46,${(0.1 + 0.4 * r).toFixed(2)})`,
-                    cursor: "pointer",
+                    pointerEvents: "none",
                   }}
                 >
                   <span
@@ -252,7 +315,6 @@ export function SnapshotView(props: {
                       background: isSel ? "#2F4BD8" : h.bg,
                       color: isSel ? "#FFFFFF" : h.fg,
                       boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
-                      pointerEvents: "none",
                     }}
                   >
                     {formatMetric(metricValue(numbers.get(s.area.id)!, activeMetric), activeMetric)}
@@ -261,13 +323,10 @@ export function SnapshotView(props: {
               );
             })}
           {showLines &&
-            lines.map((l) => (
-              <div
-                key={l.share}
-                style={{ position: "absolute", left: 0, right: 0, top: `${(100 * l.d) / H}%`, borderTop: "2px dashed rgba(47,75,216,0.85)", pointerEvents: "none" }}
-              >
+            lineGroups.map((g) => (
+              <div key={g.d} style={{ position: "absolute", left: 0, right: 0, top: `${(100 * g.d) / H}%`, borderTop: "2px dashed rgba(47,75,216,0.85)", pointerEvents: "none" }}>
                 <span style={{ position: "absolute", right: 8, top: -20, padding: "1px 8px", borderRadius: "6px 6px 0 0", background: "#2F4BD8", color: "#FFFFFF", fontSize: 11, fontWeight: 700 }}>
-                  {Math.round(l.share * 100)}% of visits see down to here
+                  {joinShares(g.shares)} of visits see down to here
                 </span>
               </div>
             ))}
@@ -278,10 +337,6 @@ export function SnapshotView(props: {
               return (
                 <div
                   key={m.index}
-                  onMouseMove={(ev) => {
-                    ev.stopPropagation();
-                    setHover({ kind: "element", el: m, x: ev.clientX, y: ev.clientY });
-                  }}
                   style={{
                     position: "absolute",
                     left: `${(100 * (e.box.x + e.box.w / 2)) / W}%`,
@@ -293,13 +348,16 @@ export function SnapshotView(props: {
                     background: "rgba(47,75,216,0.85)",
                     border: "2px solid #FFFFFF",
                     boxShadow: "0 1px 3px rgba(0,0,0,0.35)",
+                    pointerEvents: "none",
                   }}
                 />
               );
             })}
+          {hoverBox && <Outline box={hoverBox} at={at} dashed />}
+          {pinnedBox && <Outline box={pinnedBox} at={at} />}
         </div>
 
-        {/* Sidebar: areas, ranked by the chosen metric, with renaming */}
+        {/* Sidebar: the selection, then the areas ranked by the chosen metric, with renaming */}
         {sidebar && (
           <aside
             aria-label="Areas"
@@ -315,6 +373,16 @@ export function SnapshotView(props: {
               gap: 8,
             }}
           >
+            {pinned && (
+              <section aria-label="Selected" style={{ border: `2px solid ${c.accent}`, borderRadius: 12, padding: 12, background: c.surface }}>
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button type="button" onClick={() => setPinned(null)} style={{ minHeight: 30, padding: "0 10px", borderRadius: 8, border: `1px solid ${c.line}`, background: c.surface, color: c.ink, cursor: "pointer", fontSize: 13 }}>
+                    Clear selection
+                  </button>
+                </div>
+                {cardFor(pinned)}
+              </section>
+            )}
             <div style={{ fontSize: 13, color: c.muted }}>
               {ranked.length} areas · ranked by {AREA_METRICS.find((m) => m.value === activeMetric)?.label.toLowerCase()}. Rename an area to
               call it what your team calls it.
@@ -325,8 +393,8 @@ export function SnapshotView(props: {
                 value={formatMetric(valueOf(s), activeMetric)}
                 ratio={valueOf(s) / maxValue}
                 name={nameOf(s)}
-                suggested={snapshot.names[s.area.key] ? s.area.name : null}
-                selected={selected === s.area.id}
+                suggested={snapshot.names[s.area.key] ? clean(s.area.name) : null}
+                selected={pinned?.kind === "area" && pinned.id === s.area.id}
                 onSelect={() => focusArea(s.area.id)}
                 onRename={(name) => props.onRename(s.area.key, name)}
               />
@@ -335,22 +403,30 @@ export function SnapshotView(props: {
         )}
       </div>
 
-      {hover && (
-        <HoverCard x={hover.x} y={hover.y}>
-          {hover.kind === "area" ? (
-            <AreaCard stat={hover.stat} name={nameOf(hover.stat)} numbers={numbers.get(hover.stat.area.id)!} snapshot={snapshot} pageVisits={pageVisits} />
-          ) : (
-            <ElementCard
-              m={hover.el}
-              name={map.elements[hover.el.index].name}
-              seen={exposureOf(scroll, map.elements[hover.el.index].box)}
-              pageVisits={pageVisits}
-              totalClicks={matching.totalClicks}
-            />
-          )}
-        </HoverCard>
-      )}
+      {hover && !sameTarget(hover, pinned) && <HoverCard x={hover.x} y={hover.y}>{cardFor(hover)}</HoverCard>}
     </div>
+  );
+}
+
+function joinShares(shares: number[]): string {
+  const p = shares.map((s) => `${Math.round(s * 100)}%`);
+  return p.length === 1 ? p[0] : `${p.slice(0, -1).join(", ")} and ${p[p.length - 1]}`;
+}
+
+function Outline(props: { box: Box; at: (b: Box) => CSSProperties; dashed?: boolean }) {
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        position: "absolute",
+        ...props.at(props.box),
+        boxSizing: "border-box",
+        borderRadius: 4,
+        border: `3px ${props.dashed ? "dashed" : "solid"} #2F4BD8`,
+        boxShadow: "0 0 0 3px rgba(47,75,216,0.25)",
+        pointerEvents: "none",
+      }}
+    />
   );
 }
 
@@ -366,7 +442,7 @@ function Toggle(props: { label: string; checked: boolean; onChange: (v: boolean)
 function HoverCard(props: { x: number; y: number; children: ReactNode }) {
   const width = 300;
   const left = Math.min(props.x + 16, window.innerWidth - width - 12);
-  const top = Math.min(props.y + 16, window.innerHeight - 260);
+  const top = Math.min(props.y + 16, window.innerHeight - 280);
   return (
     <div
       role="tooltip"
@@ -401,6 +477,8 @@ function Stat(props: { label: string; value: string; accent?: boolean }) {
   );
 }
 
+const kicker: CSSProperties = { fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: c.muted };
+
 function AreaCard(props: { stat: AreaStat; name: string; numbers: ReturnType<typeof areaNumbers>; snapshot: Snapshot; pageVisits: number }) {
   const { stat, numbers } = props;
   const top = stat.elements
@@ -409,7 +487,7 @@ function AreaCard(props: { stat: AreaStat; name: string; numbers: ReturnType<typ
     .slice(0, 5);
   return (
     <>
-      <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: c.muted }}>Area</div>
+      <div style={kicker}>Area</div>
       <div style={{ fontWeight: 800, fontSize: 15 }}>{props.name}</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6, marginTop: 8 }}>
         <Stat label="Seen by" value={formatMetric(numbers.seen, "seen")} accent />
@@ -428,20 +506,21 @@ function AreaCard(props: { stat: AreaStat; name: string; numbers: ReturnType<typ
   );
 }
 
-function ElementCard(props: { m: MatchedElement; name: string; seen: number | null; pageVisits: number; totalClicks: number }) {
+function ElementCard(props: { m: MatchedElement | null; name: string; area: string | null; seen: number | null; pageVisits: number; totalClicks: number }) {
   const { m, seen, pageVisits } = props;
   const seenVisits = seen !== null ? seen * pageVisits : 0;
   return (
     <>
-      <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: c.muted }}>Element</div>
+      <div style={kicker}>Element</div>
       <div style={{ fontWeight: 800, fontSize: 15 }}>{props.name}</div>
-      <div style={{ fontSize: 28, fontWeight: 800, color: "#B8461A", marginTop: 4 }}>{pctOf(m.visits, pageVisits)}</div>
-      <div style={{ color: c.muted }}>of visits to this page click it</div>
+      {props.area && <div style={{ color: c.muted }}>in {props.area}</div>}
+      <div style={{ fontSize: 28, fontWeight: 800, color: "#B8461A", marginTop: 4 }}>{m ? pctOf(m.visits, pageVisits) : "0%"}</div>
+      <div style={{ color: c.muted }}>{m ? "of visits to this page click it" : "nobody clicked it in this period"}</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6, marginTop: 8 }}>
         <Stat label="Seen by" value={seen === null ? "–" : formatMetric(seen, "seen")} accent />
-        <Stat label="Clicked by, of those who saw it" value={seenVisits > 0 ? pctOf(Math.min(m.visits, seenVisits), seenVisits) : "–"} accent />
-        <Stat label="Clicks" value={formatInt(m.clicks)} />
-        <Stat label="Share of page clicks" value={pctOf(m.clicks, props.totalClicks)} />
+        <Stat label="Clicked by, of those who saw it" value={m && seenVisits > 0 ? pctOf(Math.min(m.visits, seenVisits), seenVisits) : "0%"} accent />
+        <Stat label="Clicks" value={formatInt(m?.clicks ?? 0)} />
+        <Stat label="Share of page clicks" value={m ? pctOf(m.clicks, props.totalClicks) : "0%"} />
       </div>
     </>
   );

@@ -18,7 +18,10 @@ type Status =
 
 export function ShowOnPage(props: {
   filters: Filters;
+  /** The page or group key, stored with snapshots. */
   page: string;
+  /** The page templates it covers. */
+  templates: string[];
   sampleUrl: string;
   appName: string;
   periodLabel: string;
@@ -31,8 +34,8 @@ export function ShowOnPage(props: {
   async function build(): Promise<PagePayload> {
     // Scroll depth is a plus: if it fails, the page still shows the clicks.
     const [elements, scroll] = await Promise.all([
-      loadPageElements(props.filters, props.page),
-      loadScrollDepth(props.filters, props.page).then(
+      loadPageElements(props.filters, props.templates),
+      loadScrollDepth(props.filters, props.templates).then(
         (s) => ({ ok: true as const, s }),
         (err: unknown) => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }),
       ),
@@ -43,7 +46,7 @@ export function ShowOnPage(props: {
       app: props.appName,
       appId: props.filters.appId,
       page: props.page,
-      url: props.sampleUrl || props.page.replace(/\*/g, ""),
+      url: props.sampleUrl || (props.templates[0] ?? "").replace(/\*/g, ""),
       period: props.periodLabel,
       device: props.deviceLabel,
       deviceKey: props.filters.device,

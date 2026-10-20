@@ -3,9 +3,10 @@
  * one with its numbers for the current filters, renaming and deleting.
  */
 import { useEffect, useMemo, useState } from "react";
-import type { Filters } from "../dql/queries";
-import { usePageElements, useScrollDepth } from "../hooks/data";
+import type { Device, Filters } from "../dql/queries";
+import { usePageElements, usePageVisits, useScrollDepth } from "../hooks/data";
 import { deleteSnapshot, listSnapshots, loadSnapshot, saveNames, Snapshot, SnapshotMeta } from "../lib/snapshots";
+import { deviceName, formatWhen } from "../lib/format";
 import { c } from "../theme";
 import { Dropdown } from "./Controls";
 import { SnapshotView } from "./SnapshotView";
@@ -13,7 +14,10 @@ import { Empty, ErrorNotice, Loading } from "./States";
 
 export function SnapshotPanel(props: {
   filters: Filters;
+  /** The page or group key snapshots are saved under. */
   page: string;
+  /** The page templates it covers. */
+  templates: string[];
   pageVisits: number;
   refreshKey: number;
   /** Changes when a new snapshot has been saved; `preferId` is then selected. */
@@ -66,8 +70,15 @@ export function SnapshotPanel(props: {
     };
   }, [selectedId]);
 
-  const elements = usePageElements(filters, snapshot ? page : null, props.refreshKey);
-  const scroll = useScrollDepth(filters, snapshot ? page : null, props.refreshKey);
+  // A snapshot shows one kind of page (desktop, tablet or mobile): its numbers
+  // come from the visits on that kind of device, whatever the filter says.
+  const snapDevice = snapshot && ["desktop", "tablet", "mobile"].includes(snapshot.device) ? (snapshot.device as Device) : null;
+  const dataFilters = useMemo(() => (snapDevice ? { ...filters, device: snapDevice } : filters), [filters, snapDevice]);
+  const tpl = snapshot ? props.templates : null;
+  const elements = usePageElements(dataFilters, tpl, props.refreshKey);
+  const scroll = useScrollDepth(dataFilters, tpl, props.refreshKey);
+  const deviceVisits = usePageVisits(snapDevice && snapDevice !== filters.device ? dataFilters : null, tpl, props.refreshKey);
+  const pageVisits = snapDevice && snapDevice !== filters.device ? deviceVisits.data ?? 0 : props.pageVisits;
   const meta = useMemo(() => list?.find((s) => s.id === selectedId) ?? null, [list, selectedId]);
 
   async function rename(areaKey: string, name: string) {
@@ -115,7 +126,7 @@ export function SnapshotPanel(props: {
         <Dropdown
           label="Snapshot"
           value={selectedId ?? ""}
-          options={list.map((s) => ({ value: s.id, label: `${new Date(s.createdTime).toLocaleString()} · ${s.device}` }))}
+          options={list.map((s) => ({ value: s.id, label: `${formatWhen(s.createdTime)} · ${deviceName(s.device)}` }))}
           onChange={(id) => setSelectedId(id)}
         />
         {meta &&
@@ -139,14 +150,14 @@ export function SnapshotPanel(props: {
       {saveError && <ErrorNotice title="Could not save your change" detail={saveError} />}
       {loadError && <ErrorNotice title="Could not open this snapshot" detail={loadError} />}
       {elements.error && <ErrorNotice title="Could not load the clicks" detail={elements.error} />}
-      {(!snapshot || elements.loading) && !loadError && <Loading label="Preparing the page map…" rows={3} />}
-      {snapshot && elements.data && !elements.loading && (
+      {(!snapshot || elements.loading || deviceVisits.loading) && !loadError && <Loading label="Preparing the page map…" rows={3} />}
+      {snapshot && elements.data && !elements.loading && !deviceVisits.loading && (
         <SnapshotView
           snapshot={snapshot}
           elements={elements.data}
           scroll={scroll.data && scroll.data.visits ? scroll.data : null}
-          pageVisits={props.pageVisits}
-          deviceKey={filters.device}
+          pageVisits={pageVisits}
+          deviceKey={dataFilters.device}
           saving={saving}
           onRename={rename}
         />

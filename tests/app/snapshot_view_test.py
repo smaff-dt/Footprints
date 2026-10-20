@@ -39,9 +39,10 @@ with sync_playwright() as p:
     pg.goto((HERE / "harness.html").as_uri())
     pg.wait_for_selector("[data-area]")
     info = pg.inner_text("main, body").split("\n")
-    print("coverage line:", next(l for l in info if "Snapshot taken" in l))
+    print("info line:", next(l for l in info if "Snapshot of" in l))
     print("labels on the map (Seen by):", pg.eval_on_selector_all("[data-area] span", "els => els.map(e => e.textContent)"))
-    pg.click("text=Share of clicks")
+    print("metric options:", pg.eval_on_selector_all("select option", "els => els.map(e => e.textContent)"))
+    pg.select_option("select", "share")
     print("labels on the map (Share of clicks):", pg.eval_on_selector_all("[data-area] span", "els => els.map(e => e.textContent)"))
     print("areas in the sidebar:", pg.eval_on_selector_all("aside [aria-label^=Rename]", "els => els.map(e => e.getAttribute('aria-label'))"))
 
@@ -51,6 +52,28 @@ with sync_playwright() as p:
     pg.mouse.move(x + w - 30, y + h - 30)
     pg.wait_for_timeout(150)
     print("hover card (area):", pg.inner_text("[role=tooltip]").replace("\n", " · ")[:160])
+
+    # Point at an element that nobody clicked (anything in the map), then select it
+    pg.mouse.move(5, 5)
+    target = pg.evaluate("""() => {
+      const d = window.__data, m = d.snapshot.map;
+      const clicked = new Set();
+      const img = document.querySelector('img'); const r = img.getBoundingClientRect();
+      // pick the smallest element whose centre is not inside a clicked element's box
+      const els = m.elements.map((e, i) => ({e, i})).sort((a, b) => a.e.box.w * a.e.box.h - b.e.box.w * b.e.box.h);
+      for (const {e} of els) {
+        if (e.box.w < 20 || e.box.h < 12 || e.box.y > 1500) continue;
+        return { x: r.left + (e.box.x + e.box.w / 2) * r.width / m.page.w, y: r.top + (e.box.y + e.box.h / 2) * r.height / m.page.h, name: e.name };
+      }
+    }""")
+    pg.mouse.move(target["x"], target["y"])
+    pg.wait_for_timeout(150)
+    print("hover card (element):", pg.inner_text("[role=tooltip]").replace("\n", " · ")[:200])
+    pg.mouse.click(target["x"], target["y"])
+    pg.wait_for_timeout(150)
+    print("selected in sidebar:", pg.inner_text("[aria-label=Selected]").replace("\n", " · ")[:200])
+    pg.click("text=Clear selection")
+    print("selection cleared:", pg.locator("[aria-label=Selected]").count() == 0)
 
     # Rename the first area
     pg.click("aside [aria-label^=Rename] >> nth=0")

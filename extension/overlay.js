@@ -729,6 +729,10 @@
       const row = state.byEl.get(n);
       if (row) return { kind: "element", el: n, row };
     }
+    // Not clicked: name and outline the nearest thing a visitor could click
+    // (the logo, a cart icon…), so any element can be inspected.
+    const clickable = hit.closest(CLICKABLE);
+    if (clickable && clickable !== document.body) return { kind: "blank", el: clickable };
     const area = areaContaining(hit);
     if (area) return { kind: "area", area, el: area.el, hit };
     return { kind: "blank", el: hit };
@@ -1224,7 +1228,7 @@
         page: p.page,
         url: location.href,
         title: document.title,
-        device: p.deviceKey,
+        device: window.innerWidth >= 1024 ? "desktop" : window.innerWidth >= 768 ? "tablet" : "mobile",
         viewport: { w: window.innerWidth, h: window.innerHeight },
         capturedAt: new Date().toISOString(),
         truncated: shot.truncated,

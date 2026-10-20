@@ -58,12 +58,30 @@ function deviceFilter(device: Device): string {
 }
 
 /**
- * A page "template": the URL without query string, with numeric path
- * segments replaced by `*` (so /journeys/969 and /journeys/1601 are one page).
+ * A page "template": the URL without query string, with identifiers in the
+ * path replaced by `*`, so all product pages are one page:
+ * /journeys/969, /product/OLJCESPC7Z and /order/c0000000-0000-4000-… become
+ * /journeys/*, /product/* and /order/*.
+ *
+ * An identifier is a path segment that contains a digit and starts with
+ * letters-then-digit (`969`, `OLJCESPC7Z`, `66VCHSJNUP`, UUIDs). Readable slugs
+ * such as `top-10-telescopes` are kept. If an environment rejects this
+ * pattern, queries fall back to replacing numbers only (see client.ts).
+ *
  * `view.url.full` follows route changes in single-page apps; `page.url.full`
  * is the fallback for classic multi-page sites.
  */
-const PAGE_EXPR = `replacePattern(splitString(coalesce(view.url.full, page.url.full), "?")[0], "'/' DIGIT+", "/*")`;
+const URL_EXPR = `splitString(coalesce(view.url.full, page.url.full), "?")[0]`;
+export const SMART_PAGE_EXPR = `replacePattern(${URL_EXPR}, "'/' ALPHA* DIGIT (ALNUM | '_' | '-')*", "/*")`;
+export const SIMPLE_PAGE_EXPR = `replacePattern(${URL_EXPR}, "'/' DIGIT+", "/*")`;
+const PAGE_EXPR = SMART_PAGE_EXPR;
+
+/** Keeps the events of the chosen page, or of every page of a group. */
+function pagesFilter(pages: string[]): string {
+  if (pages.length === 0) throw new Error("No page selected");
+  if (pages.length === 1) return `| filter page_template == ${dqlString(pages[0])}`;
+  return `| filter in(page_template, array(${pages.map(dqlString).join(", ")}))`;
+}
 
 const CLICKS_ONLY = `| filter characteristics.has_user_interaction == true and interaction.type == "click"`;
 
@@ -114,18 +132,18 @@ export function pagesQuery(f: Filters): string {
     "| summarize clicks = count(), visits = countDistinct(dt.rum.session.id), " +
       "sample = takeAny(coalesce(view.url.full, page.url.full)), by: {page_template}",
     "| sort visits desc",
-    "| limit 100",
+    "| limit 1000",
   );
 }
 
-/** Visits to one page: the denominator of every click rate. */
-export function pageVisitsQuery(f: Filters, page: string): string {
+/** Visits to one page (or group): the denominator of every click rate. */
+export function pageVisitsQuery(f: Filters, pages: string[]): string {
   return lines(
     `fetch user.events, ${fromClause(f.timeframe)}`,
     appFilter(f.appId),
     deviceFilter(f.device),
     `| fieldsAdd page_template = ${PAGE_EXPR}`,
-    `| filter page_template == ${dqlString(page)}`,
+    pagesFilter(pages),
     "| summarize visits = countDistinct(dt.rum.session.id)",
   );
 }
@@ -163,13 +181,13 @@ export const SCROLL_STEP = 50;
  * real environment, so the value of "y" is read from the field's text form,
  * which works for every one of these shapes.
  */
-export function scrollDepthQuery(f: Filters, page: string): string {
+export function scrollDepthQuery(f: Filters, pages: string[]): string {
   return lines(
     `fetch user.events, ${fromClause(f.timeframe)}`,
     appFilter(f.appId),
     deviceFilter(f.device),
     `| fieldsAdd page_template = ${PAGE_EXPR}`,
-    `| filter page_template == ${dqlString(page)}`,
+    pagesFilter(pages),
     POSITION_Y,
     "| fieldsAdd window_h = toDouble(browser.window.height), pos_y = toDouble(pos_y)",
     "| fieldsAdd page_scroll = interaction.type == \"scroll\" and (isNull(ui_element.tag_name) or ui_element.tag_name == \"html\" or ui_element.tag_name == \"body\")",
@@ -195,7 +213,7 @@ export function scrollDepthQuery(f: Filters, page: string): string {
  *   Clicks outside any component are "(other)".
  * - "elements": one row per clicked element (its full xpath).
  */
-export function sectionsQuery(f: Filters, page: string, groupBy: GroupBy): string {
+export function sectionsQuery(f: Filters, pages: string[], groupBy: GroupBy): string {
   const sectionExpr =
     groupBy === "sections"
       ? lines(
@@ -212,7 +230,7 @@ export function sectionsQuery(f: Filters, page: string, groupBy: GroupBy): strin
     CLICKS_ONLY,
     deviceFilter(f.device),
     `| fieldsAdd page_template = ${PAGE_EXPR}`,
-    `| filter page_template == ${dqlString(page)}`,
+    pagesFilter(pages),
     sectionExpr,
     "| summarize clicks = count(), visits = countDistinct(dt.rum.session.id), " +
       "name = takeAny(coalesce(ui_element.custom_name, ui_element.name, ui_element.detected_name)), " +

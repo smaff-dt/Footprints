@@ -19,16 +19,18 @@ It reads the user interactions captured by Dynatrace Real User Monitoring
 
 ## How it works
 
-1. **In Footprints**, choose an application and a page, then click
-   **Show on the page**.
+1. **In Footprints**, choose an application and a page (or a page group),
+   then click **Show on the page**.
 2. **On the page** that opens, the extension divides the page into areas
    automatically and shows on each one its share of clicks or how many visits
    see it. When the division looks right (use the **Detail** slider if
    needed), click **Save snapshot to Footprints**.
 3. **Back in Footprints**, the snapshot appears under **Page map**: the
    picture of the page with its areas colored by the metric you choose at the
-   top. Point at an area or an element for its details; open the sidebar to
-   see the areas ranked and to **rename** them.
+   top. Point at anything on the picture — an area, or any element such as
+   the logo or the cart icon, clicked or not — for its numbers; click to keep
+   it selected in the sidebar. The sidebar also ranks the areas and lets you
+   **rename** them.
 
 A snapshot stores the picture and a map of the page (where every area and
 clickable element is), not the numbers: those are recomputed for whatever
@@ -37,7 +39,18 @@ page changes; Footprints shows how many of the period's clicks it finds on the
 snapshot, and suggests a new one when that share drops.
 
 Snapshots are Dynatrace documents, private to you by default. Names given to
-areas are saved in the snapshot.
+areas are saved in the snapshot. A snapshot shows one kind of page — desktop,
+tablet or mobile, from the window width when it was taken — and its numbers
+always come from visits on that kind of device.
+
+### Choosing pages
+
+Addresses are grouped into page templates automatically: identifiers in the
+path (`/product/OLJCESPC7Z`, `/order/12345`) become `*`, so all product pages
+are one entry. The page picker has a **search** box, and **page groups** you
+create with dropdowns: *pages whose address contains `/product/`*, or *is
+exactly `/`* for the home page. A group covers every page its rule matches;
+groups are saved privately in Dynatrace and follow you across browsers.
 
 ### Metrics
 
@@ -49,7 +62,9 @@ areas are saved in the snapshot.
 | *(elements)* **Click rate** | Share of visits that click the element |
 | *(elements)* **Clicked by, of those who saw it** | Visits that clicked ÷ visits that saw it |
 
-Dashed lines mark where 75%, 50% and 25% of visits stop scrolling.
+Choose the metric from the **Show** dropdown. Dashed lines mark where 75%,
+50% and 25% of visits stop scrolling (lines that nearly coincide share one
+label).
 
 ### How areas are found
 
@@ -159,7 +174,9 @@ extension/
 ui/
   App.tsx                 page layout, filters, view switch, receives snapshots
   components/SnapshotPanel  snapshots of a page: list, load, rename, delete
-  components/SnapshotView   the page map: metrics bar, colored areas, hover card, sidebar
+  components/SnapshotView   the page map: metric dropdown, colored areas, any element selectable, sidebar
+  components/PagePicker   searchable page list and the page group editor
+  lib/pages.ts            page groups: matching rules and storage
   components/ShowOnPage   the "Show on the page" button and its fallback
   lib/snapshots.ts        snapshots as Dynatrace documents
   lib/snapshotMath.ts     matching recorded clicks to the map; metrics; exposure
@@ -177,7 +194,8 @@ ui/
 - Elements not on screen when the snapshot is taken (closed menus, pop-ups)
   are not on the map; their clicks count as "not on this snapshot".
 - Pages longer than 16,000 pixels are cut at that height.
-- Snapshots are desktop only for now: take them in a desktop-sized window.
+- Snapshots follow the window width: for a mobile snapshot, open the page in
+  a narrow window or in the browser's device mode.
 - "Visits" are RUM sessions.
 - Pages are opened at an address seen in the data: pages that need a login or
   the company network open only if your browser can reach them.
