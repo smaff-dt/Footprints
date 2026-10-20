@@ -666,14 +666,22 @@
     const pageW = Math.max(document.documentElement.scrollWidth, window.innerWidth);
     const foldHtml =
       hasScroll && state.showFolds
-        ? [0.75, 0.5, 0.25]
-            .map((share) => [share, depthReachedBy(share)])
-            .filter(([, d]) => d !== null && d > 0)
-            .map(
-              ([share, d]) => `<div class="fold" style="top:${Math.round(d)}px;width:${pageW}px">
-                <span>${Math.round(share * 100)}% of visits see down to here</span></div>`,
-            )
-            .join("")
+        ? (() => {
+            const lines = [0.75, 0.5, 0.25]
+              .map((share) => ({ share, d: depthReachedBy(share) }))
+              .filter((l) => l.d !== null && l.d > 0);
+            // Lines very close together share one label, side by side, instead of overlapping.
+            let lastY = -Infinity;
+            let slot = 0;
+            return lines
+              .map((l) => {
+                slot = l.d - lastY < 26 ? slot + 1 : 0;
+                lastY = l.d;
+                return `<div class="fold" style="top:${Math.round(l.d)}px;width:${pageW}px">
+                  <span style="left:${8 + slot * 230}px">${Math.round(l.share * 100)}% of visits see down to here</span></div>`;
+              })
+              .join("");
+          })()
         : "";
 
     const listHtml = ranked

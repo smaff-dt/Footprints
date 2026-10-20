@@ -157,9 +157,11 @@ export function scrollDepthQuery(f: Filters, page: string): string {
     `| filter page_template == ${dqlString(page)}`,
     "| fieldsAdd window_h = toDouble(browser.window.height), pos_y = " + y,
     "| fieldsAdd page_scroll = interaction.type == \"scroll\" and (isNull(ui_element.tag_name) or ui_element.tag_name == \"html\" or ui_element.tag_name == \"body\")",
-    "| fieldsAdd seen = if(page_scroll and isNotNull(pos_y), pos_y + window_h, " +
-      "else: if(interaction.type == \"click\" and isNotNull(pos_y), pos_y, else: window_h))",
-    "| summarize seen = max(seen), by: {dt.rum.session.id}",
+    // Each kind of evidence on its own field, so a missing value never hides another.
+    "| fieldsAdd scroll_seen = if(page_scroll == true, pos_y + window_h), click_seen = if(interaction.type == \"click\", pos_y)",
+    "| summarize screen = max(window_h), scrolled = max(scroll_seen), clicked = max(click_seen), by: {dt.rum.session.id}",
+    // The first screen is always seen; scrolling or clicking further down extends it.
+    "| fieldsAdd seen = arrayMax(arrayRemoveNulls(array(screen, scrolled, clicked)))",
     "| filter isNotNull(seen) and seen > 0",
     `| summarize visits = count(), by: {depth = bin(seen, ${SCROLL_STEP})}`,
     "| sort depth asc",
