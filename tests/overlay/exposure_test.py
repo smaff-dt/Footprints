@@ -15,7 +15,7 @@ Expected:
 from playwright.sync_api import sync_playwright
 from run import OVERLAY, HERE
 
-SHADOW = "document.getElementById('footprints-overlay-host').shadowRoot"
+SHADOW = "window.__footprints.debug.root()"
 B = ["html", "body"]
 elements = [
     {"xpath": B + ["section", "div", "button"], "clicks": 500, "visits": 450, "label": "Start now"},

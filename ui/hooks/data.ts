@@ -135,7 +135,18 @@ export interface PageElement {
 
 /** Every clicked element of a page, for drawing on the live page. */
 export async function loadPageElements(filters: Filters, page: string): Promise<PageElement[]> {
-  const rows = await runQuery(sectionsQuery(filters, page, "elements"));
+  return mapPageElements(await runQuery(sectionsQuery(filters, page, "elements")));
+}
+
+export function usePageElements(filters: Filters | null, page: string | null, refreshKey: number): QueryState<PageElement[]> {
+  return useQuery(filters && page ? sectionsQuery(filters, page, "elements") : null, mapPageElements, refreshKey);
+}
+
+export function useScrollDepth(filters: Filters | null, page: string | null, refreshKey: number): QueryState<ScrollDepth> {
+  return useQuery(filters && page ? scrollDepthQuery(filters, page) : null, mapScrollDepth, refreshKey);
+}
+
+function mapPageElements(rows: Row[]): PageElement[] {
   const out: PageElement[] = [];
   for (const r of rows) {
     let xpath: unknown;
@@ -166,7 +177,10 @@ export interface ScrollDepth {
 
 /** How far down the page visits got, for exposure on the live page. */
 export async function loadScrollDepth(filters: Filters, page: string): Promise<ScrollDepth> {
-  const rows = await runQuery(scrollDepthQuery(filters, page));
+  return mapScrollDepth(await runQuery(scrollDepthQuery(filters, page)));
+}
+
+function mapScrollDepth(rows: Row[]): ScrollDepth {
   const steps: [number, number][] = rows
     .map((r): [number, number] => [num(r["depth"]), num(r["visits"])])
     .filter(([d, v]) => d >= 0 && v > 0)

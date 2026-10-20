@@ -45,11 +45,11 @@ def run(page, name, rows, details):
     page.evaluate("p => window.__footprints.show(p)", payload(rows))
     page.wait_for_timeout(2500)
     for d in details:
-        page.evaluate(f"""() => {{ const r = document.getElementById('footprints-overlay-host').shadowRoot;
-            const s = r.getElementById('fp-detail'); s.value = '{d}'; s.dispatchEvent(new Event('change')); }}""")
+        page.evaluate(f"""() => {{ const r = window.__footprints.debug.root();
+            const s = r.getElementById('fp-detail'); s.value = '{d}'; s.dispatchEvent(new Event('change', {{bubbles: true}})); }}""")
         page.wait_for_timeout(300)
-        chips = page.evaluate("() => Array.from(document.getElementById('footprints-overlay-host').shadowRoot.querySelectorAll('.chip')).map(c => c.textContent)")
-        notes = page.evaluate("() => Array.from(document.getElementById('footprints-overlay-host').shadowRoot.querySelectorAll('.note')).map(c => c.textContent)")
+        chips = page.evaluate("() => Array.from(window.__footprints.debug.root().querySelectorAll('.chip')).map(c => c.textContent)")
+        notes = page.evaluate("() => Array.from(window.__footprints.debug.root().querySelectorAll('.note')).map(c => c.textContent)")
         print(f"  detail {d}: {len(chips)} areas -> {chips}")
         for n in notes:
             print(f"    note: {n}")

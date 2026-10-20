@@ -2,14 +2,21 @@
 <html lang="en"><head><meta charset="utf-8"><title>Fake Footprints app</title></head>
 <body>
 <p id="status">waiting</p>
+<p id="snap">no snapshot</p>
 <script>
-  // Mirrors ui/lib/extension.ts: ping, then ask the extension to open a page.
+  // Mirrors ui/lib/extension.ts: ping, ask the extension to open a page,
+  // receive snapshots and confirm they are saved.
   const log = (t) => (document.getElementById("status").textContent = t);
-  let installed = false;
+  window.snapshots = [];
   window.addEventListener("message", (e) => {
     if (e.source !== window || !e.data || e.data.source !== "footprints-extension") return;
-    if (e.data.type === "pong") { installed = true; log("pong"); }
+    if (e.data.type === "pong") log("pong");
     if (e.data.type === "shown") log(e.data.ok ? "shown-ok" : "shown-error: " + e.data.error);
+    if (e.data.type === "snapshot") {
+      window.snapshots.push(e.data.snapshot);
+      document.getElementById("snap").textContent = "snapshot " + window.snapshots.length;
+      window.postMessage({ source: "footprints-app", type: "snapshot-saved", deliveryId: e.data.deliveryId, ok: true, documentId: "doc-1" }, "*");
+    }
   });
   window.postMessage({ source: "footprints-app", type: "ping" }, "*");
   window.footprintsShow = (payload) =>

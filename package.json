@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@dynatrace-sdk/client-document": "^1.34.0",
     "@dynatrace-sdk/client-query": "^1.27.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"

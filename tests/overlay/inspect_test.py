@@ -1,9 +1,8 @@
-"""Inspect mode: pointing reads numbers, clicking selects without touching the site."""
-import pathlib
+"""Pointing at the page shows its numbers; the page itself keeps working; scrolling works."""
 from playwright.sync_api import sync_playwright
 from run import OVERLAY, HERE, payload, shop
 
-SHADOW = "document.getElementById('footprints-overlay-host').shadowRoot"
+SHADOW = "window.__footprints.debug.root()"
 
 
 def detail(page):
@@ -26,33 +25,26 @@ with sync_playwright() as p:
     data["pageVisits"] = 40000
     pg.evaluate("p => window.__footprints.show(p)", data)
     pg.wait_for_timeout(2500)
+    print("panel mode outside the extension:", pg.evaluate("window.__footprints.debug.panelMode()"))
 
     x, y = center(pg, ".hero button")
     pg.mouse.move(x, y)
     pg.wait_for_timeout(200)
-    print("hover 'Shop now':", detail(pg))
+    print("hover 'Shop now':", detail(pg)[:110])
 
     pg.mouse.click(x, y)
-    pg.wait_for_timeout(200)
-    print("after click, site received clicks:", pg.evaluate("window.siteClicks"), "| pinned:", "Selected" in detail(pg))
+    print("click on the page reaches the site:", pg.evaluate("window.siteClicks") == 1)
 
     x2, y2 = center(pg, ".prod", 3)
     pg.mouse.move(x2, y2 + 60)
     pg.wait_for_timeout(200)
-    print("pinned stays while moving:", detail(pg)[:60])
-    pg.keyboard.press("Escape")
-    pg.mouse.move(x2, y2 + 61)
-    pg.wait_for_timeout(200)
-    print("hover inside a product card (no element):", detail(pg)[:120])
-
-    pg.evaluate(f"() => {SHADOW}.querySelector('[data-act=browse]').click()")
-    pg.wait_for_timeout(200)
-    pg.mouse.click(x, y)
-    print("'Use the site' mode, site received clicks:", pg.evaluate("window.siteClicks"))
+    print("hover inside a product card:", detail(pg)[:90])
+    chips = pg.evaluate(f"() => Array.from({SHADOW}.querySelectorAll('.chip')).map(c => c.textContent)")
+    print("labels on the page are numbers only:", chips)
     pg.screenshot(path=str(HERE / "inspect.png"))
     b.close()
 
-# Scrolling must keep working while inspecting.
+# Scrolling keeps working with the overlay on.
 with sync_playwright() as p:
     b = p.chromium.launch()
     pg = b.new_page(viewport={"width": 1440, "height": 600})
@@ -63,5 +55,5 @@ with sync_playwright() as p:
     pg.mouse.move(400, 300)
     pg.mouse.wheel(0, 500)
     pg.wait_for_timeout(500)
-    print("scroll while inspecting, page moved by:", pg.evaluate("window.scrollY"), "px")
+    print("scroll with the overlay on, page moved by:", pg.evaluate("window.scrollY"), "px")
     b.close()

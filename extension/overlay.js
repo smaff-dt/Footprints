@@ -8,11 +8,14 @@
  *    looks like: landmarks (header, navigation, footer…), named components and
  *    large visual blocks. A single "Detail" slider chooses between fewer,
  *    larger areas and more, smaller ones. Nothing has to be configured.
- * 3. Colors each area by its share of the page's clicks and lists the most
- *    clicked areas in a side panel.
+ * 3. Colors each area by the chosen metric (share of clicks, or how many
+ *    visits see it) and lists the areas in a side panel.
+ * 4. Saves a snapshot: a picture of the whole page plus a map of its areas
+ *    and elements, sent to the Footprints app for analysis.
  *
- * Everything is drawn inside a shadow root so the site's styles cannot
- * interfere, and nothing on the site is changed.
+ * Drawings live in a closed shadow root and never receive clicks. The panel
+ * runs in an extension iframe, so clicks on it do not reach the website's own
+ * analytics. Nothing on the site is changed.
  */
 (() => {
   if (window.__footprints) return;
@@ -270,71 +273,83 @@
     return firstLine(el) || "Area";
   }
 
-  // ── State and rendering ───────────────────────────────────────────────────
+
+  // ── State ─────────────────────────────────────────────────────────────────
 
   const state = {
     payload: null,
     detail: 2,
+    metric: "share", // "share": share of the page's clicks · "seen": share of visits that see it
     showDots: true,
     showFolds: true,
     collapsed: false,
-    // "inspect": point at the page to read its numbers, clicks do not reach the site.
-    // "browse": the site works normally.
-    mode: "inspect",
     areas: [],
     rest: null,
     hover: null, // what is under the pointer
-    pinned: null, // what was clicked in inspect mode
     found: [], // { el, row }
     missing: [], // rows not found on the page
     byEl: new Map(), // clicked element -> row
+    saving: null, // { kind: "busy" | "done" | "pending" | "error", text }
   };
 
+  // Drawing layer: a closed shadow root, never interactive (pointer-events: none),
+  // so nothing drawn on the page can receive clicks.
   let host = null;
   let root = null;
 
-  const CSS = `
+  const LAYER_CSS = `
     :host { all: initial; }
     * { box-sizing: border-box; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
     .layer { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
     .area { position: absolute; border-radius: 6px; border: 2px solid rgba(184,70,26,.75); }
-    .chip { position: absolute; left: 4px; top: 4px; pointer-events: none;
-      display: inline-flex; gap: 6px; align-items: center; max-width: calc(100% - 8px);
-      padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; line-height: 1.4;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+    .chip { position: absolute; left: 4px; top: 4px; display: inline-flex; padding: 3px 8px; border-radius: 999px;
+      font-size: 12px; font-weight: 800; line-height: 1.4; white-space: nowrap; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
     .dot { position: absolute; border-radius: 50%; transform: translate(-50%, -50%);
       background: rgba(47,75,216,.85); border: 2px solid #fff; box-shadow: 0 1px 3px rgba(0,0,0,.35); }
-    .hl { position: absolute; display: none; pointer-events: none; border-radius: 6px; border: 3px solid #2F4BD8;
+    .hl { position: absolute; display: none; border-radius: 6px; border: 3px solid #2F4BD8;
       box-shadow: 0 0 0 4px rgba(47,75,216,.25); }
     .hl.area-target { border-style: dashed; }
-    .hl.pinned { box-shadow: 0 0 0 4px rgba(47,75,216,.3), 0 0 0 100vmax rgba(22,25,31,.18); }
-    .capture { position: fixed; inset: 0; pointer-events: auto; cursor: crosshair; background: transparent; }
-    .panel { position: fixed; top: 12px; right: 12px; width: 330px; max-height: calc(100vh - 24px); overflow: auto;
-      pointer-events: auto; background: #fff; color: #16191F; border: 1px solid #E2E5EA; border-radius: 14px;
-      box-shadow: 0 8px 28px rgba(22,25,31,.22); padding: 14px; font-size: 13px; line-height: 1.45; }
-    .panel.collapsed { width: auto; }
+    .fold { position: absolute; left: 0; height: 0; border-top: 2px dashed rgba(47,75,216,.85); }
+    .fold span { position: absolute; left: 8px; top: -21px; padding: 2px 8px; border-radius: 6px 6px 0 0;
+      background: #2F4BD8; color: #fff; font-size: 11px; font-weight: 700; white-space: nowrap; }
+    .panel-frame { position: fixed; top: 12px; right: 12px; width: 340px; height: 120px; max-height: calc(100vh - 24px);
+      border: 0; border-radius: 14px; box-shadow: 0 8px 28px rgba(22,25,31,.22); background: #fff; pointer-events: auto;
+      color-scheme: light; }
+    .panel-inline { position: fixed; top: 12px; right: 12px; width: 340px; max-height: calc(100vh - 24px); overflow: auto;
+      pointer-events: auto; border-radius: 14px; box-shadow: 0 8px 28px rgba(22,25,31,.22); background: #fff; }
+  `;
+
+  // Panel styles, shared by the isolated panel (panel.html) and the in-page fallback.
+  const PANEL_CSS = `
+    * { box-sizing: border-box; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .panel { background: #fff; color: #16191F; border: 1px solid #E2E5EA; border-radius: 14px; padding: 14px;
+      font-size: 13px; line-height: 1.45; }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
     .brand { font-weight: 800; font-size: 15px; }
     .muted { color: #5B6270; }
     .btn { min-height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid #CDD2DA; background: #fff;
       color: #16191F; font-size: 12px; font-weight: 600; cursor: pointer; }
+    .primary { width: 100%; min-height: 40px; margin-top: 10px; border-radius: 10px; border: 1px solid #16191F;
+      background: #16191F; color: #fff; font-size: 13px; font-weight: 700; cursor: pointer; }
+    .primary[disabled] { opacity: .6; cursor: progress; }
     button:focus-visible, input:focus-visible { outline: 3px solid #2F4BD8; outline-offset: 2px; }
     .seg { display: flex; gap: 3px; padding: 3px; margin-top: 10px; background: #F1F3F6; border-radius: 10px; }
-    .seg button { flex: 1; min-height: 34px; border: 0; border-radius: 8px; background: transparent; color: #5B6270;
+    .seg button { flex: 1; min-height: 32px; border: 0; border-radius: 8px; background: transparent; color: #5B6270;
       font-size: 12px; font-weight: 700; cursor: pointer; }
     .seg button[aria-pressed="true"] { background: #fff; color: #16191F; box-shadow: 0 1px 3px rgba(0,0,0,.15); }
     .stats { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; margin: 10px 0; }
     .stat { background: #F1F3F6; border-radius: 8px; padding: 8px; }
     .stat b { display: block; font-size: 16px; }
     .note { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: #FBEFE6; color: #6B2A0E; }
+    .ok { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: #E7F4EC; color: #1D6B3F; font-weight: 600; }
+    .busy { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: #EEF1FD; color: #1E34A8; }
     label { display: block; font-weight: 600; margin-top: 10px; }
     input[type=range] { width: 100%; accent-color: #2F4BD8; }
     .scale { display: flex; justify-content: space-between; font-size: 11px; color: #5B6270; }
     ol { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
     .item { width: 100%; text-align: left; padding: 6px 8px; border-radius: 8px; border: 1px solid #E2E5EA;
       background: #fff; color: #16191F; font-size: 13px; cursor: pointer; }
-    .item.hot { border-color: #2F4BD8; background: #EEF1FD; }
-    .bar { height: 5px; border-radius: 3px; background: #F1F3F6; margin-top: 4px; }
+    .bar { display: block; height: 5px; border-radius: 3px; background: #F1F3F6; margin-top: 4px; }
     .bar span { display: block; height: 5px; border-radius: 3px; background: linear-gradient(90deg,#EE9B4D,#B8461A); }
     .detail { margin-top: 10px; padding: 12px; border-radius: 10px; background: #F6F7F9; }
     .detail ul { margin: 6px 0 0; padding-left: 16px; }
@@ -346,9 +361,6 @@
     .expo { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; margin-top: 8px; }
     .expo > div { background: #EEF1FD; border-radius: 8px; padding: 6px 8px; font-size: 11px; line-height: 1.3; }
     .expo b { display: block; font-size: 18px; color: #2F4BD8; }
-    .fold { position: absolute; left: 0; height: 0; border-top: 2px dashed rgba(47,75,216,.85); }
-    .fold span { position: absolute; left: 8px; top: -21px; padding: 2px 8px; border-radius: 6px 6px 0 0;
-      background: #2F4BD8; color: #fff; font-size: 11px; font-weight: 700; white-space: nowrap; }
   `;
 
   function ensureHost() {
@@ -356,8 +368,164 @@
     host = document.createElement("div");
     host.id = "footprints-overlay-host";
     host.style.cssText = "position:absolute;left:0;top:0;width:0;height:0;z-index:2147483647;";
-    root = host.attachShadow({ mode: "open" });
+    root = host.attachShadow({ mode: "closed" });
+    root.innerHTML = `<style>${LAYER_CSS}</style><div class="layer" id="fp-layer"></div><div id="fp-panel-slot"></div>`;
     document.documentElement.appendChild(host);
+    panel.mount();
+  }
+
+  // ── The panel ─────────────────────────────────────────────────────────────
+  //
+  // Clicks on the panel must not end up in the website's own analytics (the
+  // site's Dynatrace RUM records every click on its pages). The panel is
+  // therefore an extension page in an iframe: what happens inside it is not
+  // visible to the site's scripts. If the iframe cannot be used (outside the
+  // extension, as in tests), the panel is drawn on the page instead.
+
+  const EXTENSION = typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.id;
+
+  const panel = {
+    mode: null, // "frame" | "inline"
+    frame: null,
+    ready: false,
+    token: "",
+    last: null, // last rendered { html }
+    mount() {
+      const slot = root.getElementById("fp-panel-slot");
+      if (EXTENSION) {
+        this.mode = "frame";
+        this.ready = false;
+        this.token = crypto.getRandomValues(new Uint32Array(4)).join("-");
+        this.frame = document.createElement("iframe");
+        this.frame.className = "panel-frame";
+        this.frame.title = "Footprints";
+        this.frame.src = `${chrome.runtime.getURL("panel.html")}#${this.token}`;
+        slot.appendChild(this.frame);
+        // Some sites forbid frames: fall back to the in-page panel.
+        setTimeout(() => {
+          if (this.mode === "frame" && !this.ready) this.fallback();
+        }, 3000);
+      } else {
+        this.inline(slot);
+      }
+    },
+    inline(slot) {
+      this.mode = "inline";
+      this.frame = null;
+      slot.innerHTML = `<div class="panel-inline"><style>${PANEL_CSS}</style><div id="fp-panel-body"></div></div>`;
+      const body = root.getElementById("fp-panel-body");
+      body.addEventListener("click", (e) => {
+        const t = e.target.closest("[data-act]");
+        if (t && !t.matches("input")) onPanel(t.dataset.act, t.dataset.value ?? null);
+      });
+      body.addEventListener("change", (e) => {
+        const t = e.target;
+        if (t.id === "fp-detail") onPanel("detail", Number(t.value));
+        else if (t.dataset.act) onPanel(t.dataset.act, t.checked);
+      });
+      if (this.last) this.render(this.last);
+    },
+    fallback() {
+      const slot = root && root.getElementById("fp-panel-slot");
+      if (!slot) return;
+      slot.innerHTML = "";
+      this.inline(slot);
+      state.inlineWarning = true;
+      render();
+    },
+    post(message) {
+      if (this.frame && this.frame.contentWindow) {
+        this.frame.contentWindow.postMessage({ ...message, token: this.token }, chrome.runtime.getURL("").slice(0, -1));
+      }
+    },
+    render(html) {
+      this.last = html;
+      if (this.mode === "frame") {
+        if (this.ready) this.post({ type: "render", css: PANEL_CSS, html });
+      } else if (this.mode === "inline") {
+        const body = root.getElementById("fp-panel-body");
+        if (body) body.innerHTML = html;
+      }
+    },
+    detail(html) {
+      if (this.mode === "frame") {
+        if (this.ready) this.post({ type: "detail", html });
+      } else if (this.mode === "inline") {
+        const box = root.getElementById("fp-detail-box");
+        if (box) box.innerHTML = html;
+      }
+    },
+    resize(height) {
+      if (this.frame) this.frame.style.height = `${Math.min(Math.max(60, height), window.innerHeight - 24)}px`;
+    },
+  };
+
+  // Messages from the isolated panel. Only the panel's own window is trusted.
+  window.addEventListener("message", (event) => {
+    if (!panel.frame || event.source !== panel.frame.contentWindow) return;
+    const m = event.data;
+    if (!m || typeof m.act !== "string") return;
+    if (m.act === "ready") {
+      panel.ready = true;
+      if (panel.last) panel.render(panel.last);
+      updateHover();
+      return;
+    }
+    if (m.act === "height") {
+      panel.resize(Number(m.value) || 0);
+      return;
+    }
+    onPanel(m.act, m.value);
+  });
+
+  function onPanel(act, value) {
+    switch (act) {
+      case "detail":
+        state.detail = Math.min(5, Math.max(1, Number(value) || 1));
+        state.hover = null;
+        render();
+        break;
+      case "metric":
+        if (value === "share" || value === "seen") state.metric = value;
+        render();
+        break;
+      case "dots":
+        state.showDots = !!value;
+        render();
+        break;
+      case "folds":
+        state.showFolds = !!value;
+        render();
+        break;
+      case "collapse":
+        state.collapsed = true;
+        render();
+        break;
+      case "expand":
+        state.collapsed = false;
+        render();
+        break;
+      case "area": {
+        const a = state.areas.find((x) => x.key === value);
+        if (a) {
+          a.el.scrollIntoView({ behavior: "smooth", block: "center" });
+          state.hover = { kind: "area", area: a, el: a.el };
+          updateHover();
+        }
+        break;
+      }
+      case "save":
+        saveSnapshot();
+        break;
+      case "close":
+        state.payload = null;
+        if (host) host.remove();
+        host = null;
+        root = null;
+        panel.frame = null;
+        break;
+      default:
+    }
   }
 
   function locate() {
@@ -372,10 +540,7 @@
         if (el !== document.body && el !== document.documentElement) state.byEl.set(el, row);
       } else state.missing.push(row);
     }
-    // Selections may point at elements that are gone after the page changed.
-    const alive = (t) => t && document.contains(t.el);
-    if (!alive(state.pinned)) state.pinned = null;
-    if (!alive(state.hover)) state.hover = null;
+    if (state.hover && !document.contains(state.hover.el)) state.hover = null;
   }
 
   function buildAreas() {
@@ -397,19 +562,22 @@
       a.items.push(f);
     }
     const areas = Array.from(byEl.values());
-    const seen = new Map();
     const ctx = { total, cache };
-    for (const a of areas) {
-      let name = areaName(a.el, ctx, false);
-      const n = (seen.get(name) || 0) + 1;
-      seen.set(name, n);
-      if (n > 1) name = `${name} (${n})`;
-      a.name = name;
-      a.box = pageBox(a.el);
-    }
+    uniqueNames(areas.map((a) => [a, areaName(a.el, ctx, false)]));
+    for (const a of areas) a.box = pageBox(a.el);
     areas.forEach((a, i) => (a.key = `a${i}`));
     state.areas = areas;
     state.rest = rest;
+  }
+
+  /** Gives each item its name, adding (2), (3)… to repeated names. */
+  function uniqueNames(pairs) {
+    const seen = new Map();
+    for (const [item, base] of pairs) {
+      const n = (seen.get(base) || 0) + 1;
+      seen.set(base, n);
+      item.name = n > 1 ? `${base} (${n})` : base;
+    }
   }
 
   // ── Small helpers ─────────────────────────────────────────────────────────
@@ -538,7 +706,21 @@
     </div>`;
   }
 
-  // ── Inspect: point at the page to read its numbers ────────────────────────
+  function hasScroll() {
+    const p = state.payload;
+    return !!(p && p.scroll && p.scroll.visits);
+  }
+
+  /** Value of the chosen metric for an area, 0..1. */
+  function metricOf(a, total) {
+    if (state.metric === "seen" && hasScroll()) return exposureOf(a.el) || 0;
+    return total ? a.clicks / total : 0;
+  }
+
+  // ── Hover: point at the page to read its numbers ──────────────────────────
+  //
+  // Pointing is followed with a passive mouse listener: moving the mouse is
+  // not recorded by the site's analytics, and clicks keep working normally.
 
   function targetAt(x, y) {
     const hit = document.elementsFromPoint(x, y).find((n) => n !== host && !(host && host.contains(n)));
@@ -560,13 +742,8 @@
   function detailHtml(t) {
     const p = state.payload;
     const total = pageClicks();
-    const pinnedNote = t && state.pinned ? `<div class="muted" style="margin-top:8px">Selected · press Esc or click it again to release.</div>` : "";
     if (!t) {
-      return `<div class="detail muted">${
-        state.mode === "inspect"
-          ? "Point at anything on the page to see how often it is clicked. Click to keep it selected."
-          : "Switch to <strong>Inspect</strong> to point at the page and read its numbers."
-      }</div>`;
+      return `<div class="detail muted">Point at anything on the page to see how often it is seen and clicked.</div>`;
     }
     if (t.kind === "element") {
       const area = areaContaining(t.el);
@@ -583,8 +760,7 @@
           <div class="mini">Clicks<b>${fmt(t.row.clicks)}</b></div>
           <div class="mini">Per visit<b>${perVisit}</b></div>
         </div>
-        <div class="muted" style="margin-top:6px">${pct(t.row.clicks, total)} of all clicks on the page.</div>
-        ${pinnedNote}</div>`;
+        <div class="muted" style="margin-top:6px">${pct(t.row.clicks, total)} of all clicks on the page.</div></div>`;
     }
     if (t.kind === "area") {
       const a = t.area;
@@ -600,50 +776,55 @@
       return `<div class="detail">
         <div class="kicker">Area</div>
         <strong>${esc(a.name)}</strong>
-        ${
-          seen !== null
-            ? `<div class="big">${pct(seen, 1)}</div>
-               <div class="muted">of visits scroll far enough to see it</div>`
-            : ""
-        }
+        ${seen !== null ? `<div class="big">${pct(seen, 1)}</div><div class="muted">of visits scroll far enough to see it</div>` : ""}
         <div class="minis" style="grid-template-columns:repeat(2,minmax(0,1fr))">
           <div class="mini">Share of clicks<b>${pct(a.clicks, total)}</b></div>
           <div class="mini">${per100 !== null ? `Clicks per 100 views<b>${fmt(per100)}</b>` : `Clicks<b>${fmt(a.clicks)}</b>`}</div>
         </div>
         <div style="margin-top:8px;font-weight:600">Most clicked inside</div>
-        <ul>${top}</ul>
-        ${pinnedNote}</div>`;
+        <ul>${top}</ul></div>`;
     }
     const area = areaContaining(t.el);
-    const seen = exposureOf(t.el);
     return `<div class="detail">
       <div class="kicker">Not clicked</div>
       <strong>${esc(elementName(t.el, ""))}</strong>
       <div class="muted" style="margin-top:4px">Nobody clicked here in this period${area ? `, inside ${esc(area.name)}` : ""}.</div>
-      ${exposureMinis(seen, null)}
-      ${pinnedNote}</div>`;
+      ${exposureMinis(exposureOf(t.el), null)}</div>`;
   }
 
   /** Updates only the highlight and the detail box (cheap, runs on mouse moves). */
-  function updateInspect() {
+  function updateHover() {
     if (!root) return;
-    const t = state.pinned || state.hover;
+    const t = state.hover;
     const hl = root.getElementById("fp-hl");
     if (hl) {
       if (t && t.el) {
         const b = pageBox(t.el);
         hl.style.cssText = `display:block;left:${b.x - 3}px;top:${b.y - 3}px;width:${b.w + 6}px;height:${b.h + 6}px`;
-        hl.className = `hl${t.kind === "area" ? " area-target" : ""}${state.pinned ? " pinned" : ""}`;
+        hl.className = `hl${t.kind === "area" ? " area-target" : ""}`;
       } else {
         hl.style.display = "none";
       }
     }
-    const box = root.getElementById("fp-detail-box");
-    if (box) box.innerHTML = detailHtml(t);
-    root.querySelectorAll("[data-area]").forEach((n) => {
-      n.classList.toggle("hot", !!t && t.kind === "area" && t.area.key === n.dataset.area);
-    });
+    if (!state.collapsed) panel.detail(detailHtml(t));
   }
+
+  let moveFrame = 0;
+  document.addEventListener(
+    "mousemove",
+    (e) => {
+      if (!state.payload || moveFrame) return;
+      moveFrame = requestAnimationFrame(() => {
+        moveFrame = 0;
+        const t = targetAt(e.clientX, e.clientY);
+        if (!sameTarget(t, state.hover)) {
+          state.hover = t;
+          updateHover();
+        }
+      });
+    },
+    { passive: true },
+  );
 
   // ── Full render (on data, detail or layout changes) ───────────────────────
 
@@ -651,29 +832,28 @@
     if (!state.payload) return;
     ensureHost();
     buildAreas();
-    // Areas are rebuilt: point selections at the new area objects.
-    const refresh = (t) => {
-      if (!t || t.kind !== "area") return t;
-      const a = state.areas.find((x) => x.el === t.el);
-      return a ? { ...t, area: a } : null;
-    };
-    state.pinned = refresh(state.pinned);
-    state.hover = refresh(state.hover);
+    if (state.hover && state.hover.kind === "area") {
+      const a = state.areas.find((x) => x.el === state.hover.el);
+      state.hover = a ? { ...state.hover, area: a } : null;
+    }
     const p = state.payload;
     const areas = state.areas;
     const total = pageClicks();
-    const maxClicks = Math.max(1, ...areas.map((a) => a.clicks));
-    const ranked = areas.slice().sort((a, b) => b.clicks - a.clicks);
+    const scroll = hasScroll();
+    if (!scroll && state.metric === "seen") state.metric = "share";
+    const maxMetric = Math.max(1e-9, ...areas.map((a) => metricOf(a, total)));
+    const ranked = areas.slice().sort((a, b) => metricOf(b, total) - metricOf(a, total));
 
+    // On the page: one number per area, the chosen metric. No names.
     const areaHtml = areas
       .slice()
       .sort((a, b) => b.box.w * b.box.h - a.box.w * a.box.h)
       .map((a) => {
-        const r = a.clicks / maxClicks;
+        const r = metricOf(a, total) / maxMetric;
         const c = heat(r);
         const alpha = (0.1 + 0.4 * r).toFixed(2);
         return `<div class="area" style="left:${a.box.x}px;top:${a.box.y}px;width:${a.box.w}px;height:${a.box.h}px;background:rgba(232,116,46,${alpha})">
-          <span class="chip" style="background:${c.bg};color:${c.fg}">${esc(a.name)} · ${pct(a.clicks, total)}</span></div>`;
+          <span class="chip" style="background:${c.bg};color:${c.fg}">${pct(metricOf(a, total), 1)}</span></div>`;
       })
       .join("");
 
@@ -691,38 +871,46 @@
           .join("")
       : "";
 
-    const hasScroll = !!(p.scroll && p.scroll.visits);
     const pageW = Math.max(document.documentElement.scrollWidth, window.innerWidth);
-    const foldHtml =
-      hasScroll && state.showFolds
-        ? (() => {
-            const lines = [0.75, 0.5, 0.25]
-              .map((share) => ({ share, d: depthReachedBy(share) }))
-              .filter((l) => l.d !== null && l.d > 0);
-            // Lines very close together share one label, side by side, instead of overlapping.
-            let lastY = -Infinity;
-            let slot = 0;
-            return lines
-              .map((l) => {
-                slot = l.d - lastY < 26 ? slot + 1 : 0;
-                lastY = l.d;
-                return `<div class="fold" style="top:${Math.round(l.d)}px;width:${pageW}px">
-                  <span style="left:${8 + slot * 230}px">${Math.round(l.share * 100)}% of visits see down to here</span></div>`;
-              })
-              .join("");
-          })()
-        : "";
+    let foldHtml = "";
+    if (scroll && state.showFolds) {
+      let lastY = -Infinity;
+      let slot = 0;
+      foldHtml = [0.75, 0.5, 0.25]
+        .map((share) => ({ share, d: depthReachedBy(share) }))
+        .filter((l) => l.d !== null && l.d > 0)
+        .map((l) => {
+          // Lines very close together get their labels side by side.
+          slot = l.d - lastY < 26 ? slot + 1 : 0;
+          lastY = l.d;
+          return `<div class="fold" style="top:${Math.round(l.d)}px;width:${pageW}px">
+            <span style="left:${8 + slot * 230}px">${Math.round(l.share * 100)}% of visits see down to here</span></div>`;
+        })
+        .join("");
+    }
+
+    root.getElementById("fp-layer").innerHTML = `${areaHtml}${foldHtml}${dotHtml}<div id="fp-hl" class="hl"></div>`;
 
     const listHtml = ranked
       .slice(0, 10)
       .map(
-        (a) => `<li><button type="button" class="item" data-area="${a.key}">
-          <span class="row"><strong>${esc(a.name)}</strong><span>${pct(a.clicks, total)}</span></span>
-          <span class="bar" style="display:block"><span style="width:${Math.max(3, Math.round((100 * a.clicks) / maxClicks))}%"></span></span>
-          ${hasScroll ? `<span class="muted" style="display:block;font-size:11px;margin-top:3px">Seen by ${pct(exposureOf(a.el), 1)} of visits</span>` : ""}</button></li>`,
+        (a) => `<li><button type="button" class="item" data-act="area" data-value="${a.key}">
+          <span class="row"><strong>${esc(a.name)}</strong><span>${pct(metricOf(a, total), 1)}</span></span>
+          <span class="bar"><span style="width:${Math.max(3, Math.round((100 * metricOf(a, total)) / maxMetric))}%"></span></span></button></li>`,
       )
       .join("");
 
+    panel.render(state.collapsed ? collapsedHtml() : panelHtml({ total, areas, listHtml, scroll }));
+    updateHover();
+  }
+
+  function collapsedHtml() {
+    return `<div class="panel"><div class="row"><span class="brand">Footprints</span>
+      <button type="button" class="btn" data-act="expand">Show panel</button></div></div>`;
+  }
+
+  function notesHtml(total) {
+    const p = state.payload;
     const foundClicks = state.found.reduce((s, f) => s + f.row.clicks, 0);
     const notes = [];
     const looksLikeError = /\b(403|404|500|502|503|forbidden|not found|access denied|unauthori[sz]ed)\b/i.test(
@@ -742,7 +930,7 @@
     if (state.rest && state.rest.clicks) {
       notes.push(`${pct(state.rest.clicks, total)} of the clicks are on empty parts of the page, outside every area.`);
     }
-    if (!hasScroll) {
+    if (!hasScroll()) {
       notes.push(
         p.scrollError
           ? `How far visitors scroll could not be loaded, so “seen by” is not shown. (${esc(p.scrollError)})`
@@ -755,122 +943,322 @@
     if ((p.deviceKey === "desktop" && w < 1024) || (p.deviceKey === "mobile" && w >= 768) || (p.deviceKey === "tablet" && (w < 768 || w >= 1024))) {
       notes.push(`The data is for ${esc(String(p.device).toLowerCase())}, but this window is ${w}px wide: resize it to see the page as those visitors did.`);
     }
-
-    const inspect = state.mode === "inspect";
-    const panelHtml = state.collapsed
-      ? `<div class="panel collapsed"><div class="row"><span class="brand">Footprints</span><button type="button" class="btn" data-act="expand">Show panel</button></div></div>`
-      : `<div class="panel" role="dialog" aria-label="Footprints">
-          <div class="row"><span class="brand">Footprints</span>
-            <span><button type="button" class="btn" data-act="collapse" aria-label="Minimise panel">–</button>
-            <button type="button" class="btn" data-act="close" aria-label="Remove overlay">✕</button></span></div>
-          <div class="muted">${esc(p.app || "")} · ${esc(p.period || "")} · ${esc(p.device || "")}</div>
-          <div class="seg" role="group" aria-label="Mode">
-            <button type="button" data-act="inspect" aria-pressed="${inspect}">Inspect</button>
-            <button type="button" data-act="browse" aria-pressed="${!inspect}">Use the site</button>
-          </div>
-          <div id="fp-detail-box"></div>
-          <div class="stats">
-            <div class="stat">Clicks on this page<b>${fmt(total)}</b></div>
-            <div class="stat">Areas<b>${fmt(areas.length)}</b></div>
-          </div>
-          <label for="fp-detail">Detail</label>
-          <input id="fp-detail" type="range" min="1" max="5" step="1" value="${state.detail}" />
-          <div class="scale"><span>Fewer, larger areas</span><span>More, smaller</span></div>
-          <label style="font-weight:500"><input type="checkbox" data-act="dots" ${state.showDots ? "checked" : ""}/> Show clicked elements</label>
-          ${hasScroll ? `<label style="font-weight:500;margin-top:4px"><input type="checkbox" data-act="folds" ${state.showFolds ? "checked" : ""}/> Show how far visitors scroll</label>` : ""}
-          <ol aria-label="Most clicked areas">${listHtml}</ol>
-          ${notes.map((n) => `<div class="note">${n}</div>`).join("")}
-        </div>`;
-
-    root.innerHTML = `<style>${CSS}</style>
-      <div class="layer">${areaHtml}${foldHtml}${dotHtml}<div id="fp-hl" class="hl"></div></div>
-      ${inspect ? `<div class="capture" id="fp-capture"></div>` : ""}
-      ${panelHtml}`;
-    wire();
-    updateInspect();
+    if (state.inlineWarning) {
+      notes.push("This site does not allow the Footprints panel to run separately, so clicks on this panel may appear in the site's own analytics.");
+    }
+    return notes.map((n) => `<div class="note">${n}</div>`).join("");
   }
 
-  function wire() {
-    const capture = root.getElementById("fp-capture");
-    if (capture) {
-      let frame = 0;
-      capture.addEventListener("mousemove", (e) => {
-        if (frame) return;
-        frame = requestAnimationFrame(() => {
-          frame = 0;
-          const t = targetAt(e.clientX, e.clientY);
-          if (!sameTarget(t, state.hover)) {
-            state.hover = t;
-            updateInspect();
-          }
-        });
-      });
-      capture.addEventListener("mouseleave", () => {
-        state.hover = null;
-        updateInspect();
-      });
-      capture.addEventListener("click", (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const t = targetAt(e.clientX, e.clientY);
-        state.pinned = sameTarget(t, state.pinned) ? null : t;
-        updateInspect();
-      });
-    }
-    root.querySelectorAll("[data-area]").forEach((n) => {
-      n.addEventListener("click", () => {
-        const a = state.areas.find((x) => x.key === n.dataset.area);
-        if (!a) return;
-        state.pinned = { kind: "area", area: a, el: a.el };
-        a.el.scrollIntoView({ behavior: "smooth", block: "center" });
-        updateInspect();
-      });
-    });
-    const slider = root.getElementById("fp-detail");
-    if (slider) {
-      slider.addEventListener("change", () => {
-        state.detail = Number(slider.value);
-        if (state.pinned && state.pinned.kind === "area") state.pinned = null;
-        if (state.hover && state.hover.kind === "area") state.hover = null;
-        render();
-        const s = root.getElementById("fp-detail");
-        if (s) s.focus();
-      });
-    }
-    const act = (name, fn) => root.querySelectorAll(`[data-act="${name}"]`).forEach((n) => n.addEventListener("click", fn));
-    const dots = root.querySelector('[data-act="dots"]');
-    if (dots) dots.addEventListener("change", () => ((state.showDots = dots.checked), render()));
-    const folds = root.querySelector('[data-act="folds"]');
-    if (folds) folds.addEventListener("change", () => ((state.showFolds = folds.checked), render()));
-    act("inspect", () => ((state.mode = "inspect"), render()));
-    act("browse", () => ((state.mode = "browse"), (state.hover = null), (state.pinned = null), render()));
-    act("collapse", () => ((state.collapsed = true), render()));
-    act("expand", () => ((state.collapsed = false), render()));
-    act("close", () => {
-      state.payload = null;
-      if (host) host.remove();
-      host = null;
-      root = null;
-    });
+  function savingHtml() {
+    const s = state.saving;
+    if (!s) return "";
+    const cls = s.kind === "done" ? "ok" : s.kind === "busy" ? "busy" : "note";
+    return `<div class="${cls}" role="status">${esc(s.text)}</div>`;
   }
 
-  document.addEventListener(
-    "keydown",
-    (e) => {
-      if (e.key === "Escape" && state.payload && state.pinned) {
-        state.pinned = null;
-        updateInspect();
+  function panelHtml({ total, areas, listHtml, scroll }) {
+    const p = state.payload;
+    const busy = state.saving && state.saving.kind === "busy";
+    return `<div class="panel" role="dialog" aria-label="Footprints">
+      <div class="row"><span class="brand">Footprints</span>
+        <span><button type="button" class="btn" data-act="collapse" aria-label="Minimise panel">–</button>
+        <button type="button" class="btn" data-act="close" aria-label="Remove overlay">✕</button></span></div>
+      <div class="muted">${esc(p.app || "")} · ${esc(p.period || "")} · ${esc(p.device || "")}</div>
+      <button type="button" class="primary" data-act="save" ${busy ? "disabled" : ""}>${busy ? "Saving snapshot…" : "Save snapshot to Footprints"}</button>
+      ${savingHtml()}
+      ${
+        scroll
+          ? `<div class="seg" role="group" aria-label="Show on the page">
+              <button type="button" data-act="metric" data-value="share" aria-pressed="${state.metric === "share"}">Share of clicks</button>
+              <button type="button" data-act="metric" data-value="seen" aria-pressed="${state.metric === "seen"}">Seen by</button>
+            </div>`
+          : ""
       }
-    },
-    true,
-  );
+      <div id="fp-detail-box"></div>
+      <div class="stats">
+        <div class="stat">Clicks on this page<b>${fmt(total)}</b></div>
+        <div class="stat">Areas<b>${fmt(areas.length)}</b></div>
+      </div>
+      <label for="fp-detail">Detail</label>
+      <input id="fp-detail" type="range" min="1" max="5" step="1" value="${state.detail}" />
+      <div class="scale"><span>Fewer, larger areas</span><span>More, smaller</span></div>
+      <label style="font-weight:500"><input type="checkbox" data-act="dots" ${state.showDots ? "checked" : ""}/> Show clicked elements</label>
+      ${scroll ? `<label style="font-weight:500;margin-top:4px"><input type="checkbox" data-act="folds" ${state.showFolds ? "checked" : ""}/> Show how far visitors scroll</label>` : ""}
+      <ol aria-label="Areas">${listHtml}</ol>
+      ${notesHtml(total)}
+    </div>`;
+  }
 
-  // Redraw when the page layout changes (resizes, late-loading content).
+  // ── Snapshot: picture of the whole page + map of its areas and elements ───
+
+  const CLICKABLE = "a[href], button, input, select, textarea, label, summary, img, [role=button], [role=link], [role=tab], [onclick], [tabindex]";
+  const MAX_ELEMENTS = 3000;
+  const MAX_PAGE_HEIGHT = 16000;
+  const OUTPUT_WIDTH = 1440;
+
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  function round(b) {
+    return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.w), h: Math.round(b.h) };
+  }
+
+  /** `div[@id="root"]` when the element has an id, otherwise `div[2]` (2nd div among its siblings). */
+  function segmentOf(el) {
+    if (el.id) return `${el.localName}[@id="${el.id}"]`;
+    let n = 1;
+    for (let s = el.previousElementSibling; s; s = s.previousElementSibling) if (s.localName === el.localName) n++;
+    return `${el.localName}[${n}]`;
+  }
+
+  /**
+   * Keys the app can match recorded xpaths against: the full path from <html>,
+   * and the path from every ancestor that has an id (Dynatrace sometimes starts
+   * an xpath at the nearest id, e.g. //*[@id="cart"]/div/div).
+   */
+  function canonicalKeys(el) {
+    const segs = [];
+    const keys = [];
+    for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+      if (n.id && segs.length) keys.push(`#${n.id}/${segs.slice().reverse().join("/")}`);
+      if (n.id && !segs.length) keys.push(`#${n.id}`);
+      segs.push(n === document.documentElement ? "html[1]" : segmentOf(n));
+    }
+    keys.unshift(segs.reverse().join("/"));
+    return keys;
+  }
+
+  function pathOnly(url) {
+    try {
+      const u = new URL(url, location.href);
+      return u.pathname + u.search;
+    } catch {
+      return "";
+    }
+  }
+
+  /** What the element shows today: its link target, picture and text. */
+  function contentOf(el) {
+    const a = el.closest("a[href]");
+    const img = el.localName === "img" ? el : el.querySelector("img");
+    return {
+      href: a ? pathOnly(a.getAttribute("href")) : "",
+      src: img && img.currentSrc ? pathOnly(img.currentSrc) : "",
+      text: clip(ownText(el), 80),
+    };
+  }
+
+  function buildMap(pageHeight) {
+    const total = pageArea();
+    const cache = new Map();
+    const ctx = { total, cache };
+    const areaIds = new Map();
+    const areas = [];
+    const areaId = (el) => {
+      if (!areaIds.has(el)) {
+        const item = { id: `a${areas.length}`, key: canonicalKeys(el)[0], box: round(pageBox(el)) };
+        areaIds.set(el, item.id);
+        areas.push(item);
+        item._el = el;
+      }
+      return areaIds.get(el);
+    };
+    const elements = [];
+    const byEl = new Map();
+    const add = (el, rawKey) => {
+      if (el === document.body || el === document.documentElement || (host && host.contains(el))) return;
+      const existing = byEl.get(el);
+      if (existing) {
+        if (rawKey && !existing.keys.includes(rawKey)) existing.keys.unshift(rawKey);
+        return;
+      }
+      if (elements.length >= MAX_ELEMENTS) return;
+      const r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) return;
+      const item = {
+        keys: rawKey ? [rawKey, ...canonicalKeys(el)] : canonicalKeys(el),
+        box: round(pageBox(el)),
+        name: elementName(el, ""),
+        chain: areaChain(el, total, cache).map(areaId),
+        content: contentOf(el),
+      };
+      byEl.set(el, item);
+      elements.push(item);
+    };
+    for (const f of state.found) add(f.el, JSON.stringify(f.row.xpath));
+    for (const el of document.querySelectorAll(CLICKABLE)) add(el, null);
+    uniqueNames(areas.map((a) => [a, areaName(a._el, ctx, false)]));
+    areas.forEach((a) => delete a._el);
+    return {
+      areas,
+      elements,
+      page: { w: document.documentElement.clientWidth, h: pageHeight },
+      detail: state.detail,
+    };
+  }
+
+  function capture() {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({ type: "footprints:capture" }, (res) => {
+        const err = chrome.runtime.lastError ? chrome.runtime.lastError.message : res && res.error;
+        if (err || !res || !res.dataUrl) reject(new Error(err || "The browser did not return a picture."));
+        else resolve(res.dataUrl);
+      });
+    });
+  }
+
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Could not read the captured picture."));
+      img.src = src;
+    });
+  }
+
+  /** Elements that stay on screen while scrolling (sticky headers, cookie bars…). */
+  function fixedElements() {
+    const out = [];
+    for (const el of document.body.querySelectorAll("*")) {
+      if (host && (el === host || host.contains(el))) continue;
+      const pos = getComputedStyle(el).position;
+      if (pos === "fixed" || pos === "sticky") out.push(el);
+    }
+    return out;
+  }
+
+  /**
+   * Scrolls through the page taking one picture per screen and stitches them.
+   * The overlay is hidden meanwhile; sticky elements are hidden after the
+   * first picture so they do not repeat down the page.
+   */
+  async function capturePage(onProgress) {
+    const doc = document.documentElement;
+    const startY = window.scrollY;
+    const viewH = window.innerHeight;
+    const viewW = window.innerWidth;
+    const width = doc.clientWidth;
+    host.style.display = "none";
+    const hidden = [];
+    try {
+      // 1. Go through the page once so lazy content loads, then back to the top.
+      const fullH = () => Math.min(Math.max(doc.scrollHeight, document.body.scrollHeight), MAX_PAGE_HEIGHT);
+      for (let y = 0; y < fullH(); y += Math.round(viewH * 0.8)) {
+        window.scrollTo(0, y);
+        await wait(150);
+      }
+      window.scrollTo(0, 0);
+      await wait(600);
+      const height = fullH();
+      const truncated = Math.max(doc.scrollHeight, document.body.scrollHeight) > MAX_PAGE_HEIGHT;
+      const map = buildMap(height);
+
+      // 2. One picture per screen. The browser allows about two pictures a second.
+      const shots = [];
+      const sticky = fixedElements();
+      const hide = (el) => {
+        hidden.push([el, el.style.getPropertyValue("visibility"), el.style.getPropertyPriority("visibility")]);
+        el.style.setProperty("visibility", "hidden", "important");
+      };
+      // Bars and widgets stuck to the bottom or the sides (cookie banners, chat
+      // buttons) would cover the page: hide them from the start. Headers stuck
+      // to the top stay in the first picture only.
+      const atTop = (el) => el.getBoundingClientRect().top < viewH * 0.25;
+      for (const el of sticky) if (!atTop(el)) hide(el);
+      for (let y = 0, i = 0; ; i++) {
+        window.scrollTo(0, y);
+        await wait(600);
+        const actualY = Math.round(window.scrollY);
+        onProgress(`Taking pictures of the page… ${Math.min(100, Math.round(((actualY + viewH) / height) * 100))}%`);
+        shots.push({ y: actualY, dataUrl: await capture() });
+        if (i === 0) for (const el of sticky) if (atTop(el)) hide(el);
+        if (actualY + viewH >= height - 1 || y + viewH >= height) break;
+        y += viewH;
+        if (shots.length > 60) break;
+      }
+
+      // 3. Stitch.
+      onProgress("Putting the pictures together…");
+      const scale = Math.min(1, OUTPUT_WIDTH / width);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(width * scale);
+      canvas.height = Math.round(height * scale);
+      const g = canvas.getContext("2d");
+      g.fillStyle = "#fff";
+      g.fillRect(0, 0, canvas.width, canvas.height);
+      for (const shot of shots) {
+        const img = await loadImage(shot.dataUrl);
+        g.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight, 0, Math.round(shot.y * scale), Math.round(viewW * scale), Math.round(viewH * scale));
+      }
+      return {
+        image: { dataUrl: canvas.toDataURL("image/jpeg", 0.82), width: canvas.width, height: canvas.height, scale },
+        map,
+        truncated,
+      };
+    } finally {
+      for (const [el, value, priority] of hidden) {
+        if (value) el.style.setProperty("visibility", value, priority);
+        else el.style.removeProperty("visibility");
+      }
+      window.scrollTo(0, startY);
+      host.style.display = "";
+    }
+  }
+
+  function setSaving(saving) {
+    state.saving = saving;
+    render();
+  }
+
+  async function saveSnapshot() {
+    if (!EXTENSION || (state.saving && state.saving.kind === "busy")) return;
+    const p = state.payload;
+    setSaving({ kind: "busy", text: "Preparing… please keep this tab open and do not scroll." });
+    try {
+      const shot = await capturePage((text) => setSaving({ kind: "busy", text }));
+      setSaving({ kind: "busy", text: "Sending the snapshot to Footprints…" });
+      const snapshot = {
+        kind: "footprints-snapshot",
+        v: 1,
+        app: p.app,
+        appId: p.appId || p.app,
+        page: p.page,
+        url: location.href,
+        title: document.title,
+        device: p.deviceKey,
+        viewport: { w: window.innerWidth, h: window.innerHeight },
+        capturedAt: new Date().toISOString(),
+        truncated: shot.truncated,
+        image: shot.image,
+        map: shot.map,
+        names: {},
+      };
+      const res = await new Promise((resolve) =>
+        chrome.runtime.sendMessage({ type: "footprints:snapshot", snapshot }, (r) =>
+          resolve(chrome.runtime.lastError ? { ok: false, error: chrome.runtime.lastError.message } : r || {}),
+        ),
+      );
+      if (res.ok) {
+        setSaving({ kind: "done", text: "Snapshot saved. Open it in Footprints to analyse the page." });
+      } else if (res.pending) {
+        setSaving({
+          kind: "pending",
+          text: "Footprints is not open any more: the snapshot is kept in this browser and will be added the next time you open Footprints.",
+        });
+      } else {
+        setSaving({ kind: "error", text: `The snapshot could not be saved: ${res.error || "unknown error"}` });
+      }
+    } catch (err) {
+      setSaving({ kind: "error", text: `The snapshot could not be taken: ${err && err.message ? err.message : err}` });
+    }
+  }
+
+  // ── Keeping up with the page ──────────────────────────────────────────────
+
   let timer = null;
   function schedule() {
     clearTimeout(timer);
     timer = setTimeout(() => {
-      if (!state.payload) return;
+      if (!state.payload || (state.saving && state.saving.kind === "busy")) return;
       locate();
       render();
     }, 600);
@@ -902,8 +1290,8 @@
   function show(payload) {
     state.payload = payload;
     state.hover = null;
-    state.pinned = null;
-    state.mode = "inspect";
+    state.saving = null;
+    state.metric = "share";
     locate();
     state.detail = startingDetail();
     render();
@@ -911,9 +1299,17 @@
     setTimeout(schedule, 1500);
   }
 
-  window.__footprints = { show, findElement, readSegment, targetAt: (x, y) => targetAt(x, y) };
+  window.__footprints = {
+    show,
+    findElement,
+    readSegment,
+    canonicalKeys,
+    targetAt: (x, y) => targetAt(x, y),
+    // For tests: the closed shadow root and the in-page panel.
+    debug: { root: () => root, panelMode: () => panel.mode, buildMap: () => buildMap(document.documentElement.scrollHeight) },
+  };
 
-  if (typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.onMessage) {
+  if (EXTENSION) {
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message && message.type === "footprints:render") {
         show(message.payload);

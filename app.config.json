@@ -7,7 +7,7 @@
   "app": {
     "id": "my.footprints",
     "name": "Footprints",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "icon": "./icon.svg",
     "description": "See which parts of a page your visitors click, use and ignore.",
     "scopes": [
@@ -22,6 +22,14 @@
       {
         "name": "storage:entities:read",
         "comment": "List the RUM applications for the application picker"
+      },
+      {
+        "name": "document:documents:read",
+        "comment": "Read the page snapshots you saved"
+      },
+      {
+        "name": "document:documents:write",
+        "comment": "Save page snapshots and the names you give to their areas"
       }
     ]
   }

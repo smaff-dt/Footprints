@@ -5,13 +5,15 @@
  * through window.postMessage, so the extension never needs Dynatrace
  * credentials: the app reads the data, the extension only draws it.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PageElement, ScrollDepth } from "../hooks/data";
+import { isSnapshot, Snapshot } from "./snapshots";
 
 export interface PagePayload {
   kind: "footprints-page";
   v: 1;
   app: string;
+  appId: string;
   page: string;
   url: string;
   period: string;
@@ -27,10 +29,44 @@ export interface PagePayload {
 
 interface ExtensionMessage {
   source: "footprints-extension";
-  type: "pong" | "shown";
+  type: "pong" | "shown" | "snapshot";
   requestId?: string;
   ok?: boolean;
   error?: string | null;
+  deliveryId?: string;
+  snapshot?: unknown;
+}
+
+/**
+ * Receives snapshots taken by the extension and confirms them once `save`
+ * has stored them. The extension keeps a snapshot until it is confirmed.
+ */
+export function useSnapshotInbox(save: (snapshot: Snapshot) => Promise<string>): void {
+  const saveRef = useRef(save);
+  saveRef.current = save;
+  useEffect(() => {
+    const handled = new Set<string>();
+    const onMessage = async (event: MessageEvent) => {
+      if (event.source !== window || !isExtensionMessage(event.data) || event.data.type !== "snapshot") return;
+      const { deliveryId, snapshot } = event.data;
+      if (!deliveryId || handled.has(deliveryId)) return;
+      handled.add(deliveryId);
+      const answer = (ok: boolean, error: string | null, documentId: string | null) =>
+        window.postMessage({ source: "footprints-app", type: "snapshot-saved", deliveryId, ok, error, documentId }, "*");
+      if (!isSnapshot(snapshot)) {
+        answer(false, "This is not a Footprints snapshot.", null);
+        return;
+      }
+      try {
+        answer(true, null, await saveRef.current(snapshot));
+      } catch (err) {
+        handled.delete(deliveryId);
+        answer(false, err instanceof Error ? err.message : String(err), null);
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
 }
 
 function isExtensionMessage(data: unknown): data is ExtensionMessage {

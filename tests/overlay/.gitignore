@@ -1,2 +1,4 @@
 *.png
+*.jpg
+snapshot.json
 __pycache__/

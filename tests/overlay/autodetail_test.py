@@ -2,7 +2,7 @@
 from playwright.sync_api import sync_playwright
 from run import OVERLAY, HERE
 
-SHADOW = "document.getElementById('footprints-overlay-host').shadowRoot"
+SHADOW = "window.__footprints.debug.root()"
 N = ["html", "body", 'div[@id="__next"]', "main", "div[2]", "div"]
 elements = [{"xpath": N + [f"div[{k}]", "div"], "clicks": 300 - k, "visits": 200 - k, "label": "Area"} for k in range(1, 11)]
 elements.append({"xpath": ["html", "body", 'div[@id="__next"]', "main", "div", "div", "button"], "clicks": 2, "visits": 1, "label": "Go Shopping"})
@@ -25,7 +25,7 @@ with sync_playwright() as p:
     pg.mouse.move(*r)
     pg.wait_for_timeout(300)
     print("inspect a picture:", pg.evaluate(f"() => {SHADOW}.getElementById('fp-detail-box').innerText.replace(/\\s+/g, ' ').slice(0, 160)"))
-    pg.evaluate(f"() => {{ const s = {SHADOW}.getElementById('fp-detail'); s.value = '1'; s.dispatchEvent(new Event('change')); }}")
+    pg.evaluate(f"() => {{ const s = {SHADOW}.getElementById('fp-detail'); s.value = '1'; s.dispatchEvent(new Event('change', {{bubbles: true}})); }}")
     pg.wait_for_timeout(300)
     pg.mouse.move(r[0], r[1] + 1)
     pg.wait_for_timeout(300)

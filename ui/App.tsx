@@ -1,18 +1,23 @@
 /**
- * Footprints – which parts of a page do visitors use?
+ * Footprints – which parts of a page do visitors see and use?
  *
- * Phase 1: pick an application and a page, filter by period and device,
- * and see the page's sections ranked by how many visits click them.
+ * Pick an application and a page, filter by period and device. "Page map"
+ * shows a saved snapshot of the page with its areas colored by the chosen
+ * metric; "List" ranks the page's sections. "Show on the page" opens the live
+ * page with the browser extension, where a snapshot can be saved.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Card, Checkbox, Dropdown, Option, Segmented } from "./components/Controls";
 import { RANK_LABELS, RankBy, rankSections, SectionDetail, SectionRanking } from "./components/SectionRanking";
 import { ShowOnPage } from "./components/ShowOnPage";
+import { SnapshotPanel } from "./components/SnapshotPanel";
 import { Empty, ErrorNotice, Loading } from "./components/States";
 import { Device, Filters, GroupBy, Timeframe } from "./dql/queries";
 import { useApplications, usePages, usePageVisits, useSections } from "./hooks/data";
 import { formatInt } from "./lib/format";
 import { pageHost, pageLabel } from "./lib/labels";
+import { useSnapshotInbox } from "./lib/extension";
+import { saveSnapshot, Snapshot } from "./lib/snapshots";
 import { usePersistentState } from "./lib/storage";
 import { c, GLOBAL_CSS } from "./theme";
 
@@ -36,6 +41,13 @@ const GROUPINGS: Option<GroupBy>[] = [
   { value: "elements", label: "Individual elements" },
 ];
 
+type View = "map" | "list";
+
+const VIEWS: Option<View>[] = [
+  { value: "map", label: "Page map" },
+  { value: "list", label: "List" },
+];
+
 const RANKINGS: Option<RankBy>[] = (Object.keys(RANK_LABELS) as RankBy[]).map((k) => ({ value: k, label: RANK_LABELS[k] }));
 
 export function App() {
@@ -48,6 +60,9 @@ export function App() {
   const [hideSmall, setHideSmall] = usePersistentState("fp.hideSmall", true);
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [view, setView] = usePersistentState<View>("fp.view", "map");
+  const [inbox, setInbox] = useState<{ tick: number; id: string | null }>({ tick: 0, id: null });
+  const [savedNote, setSavedNote] = useState<string | null>(null);
 
   // Applications
   const apps = useApplications();
@@ -72,9 +87,23 @@ export function App() {
   const pageReady = !!pages.data?.some((p) => p.url === page);
   const activePage = pageReady ? page : null;
 
+  // Snapshots arriving from the browser extension are saved as documents.
+  const onSnapshot = useCallback(async (snapshot: Snapshot) => {
+    const id = await saveSnapshot(snapshot, pageLabel(snapshot.page));
+    setInbox((i) => ({ tick: i.tick + 1, id }));
+    setSavedNote(`Snapshot of “${pageLabel(snapshot.page)}” saved.`);
+    if (snapshot.appId && snapshot.page) {
+      setAppId(snapshot.appId);
+      setPage(snapshot.page);
+      setView("map");
+    }
+    return id;
+  }, [setAppId, setPage, setView]);
+  useSnapshotInbox(onSnapshot);
+
   // One page
   const visits = usePageVisits(filters, activePage, refreshKey);
-  const sections = useSections(filters, activePage, groupBy, refreshKey);
+  const sections = useSections(filters, view === "list" ? activePage : null, groupBy, refreshKey);
 
   useEffect(() => setSelectedKey(null), [appId, page, groupBy]);
 
@@ -185,6 +214,14 @@ export function App() {
           <Segmented label="Device" value={device} options={DEVICES} onChange={setDevice} />
         </Card>
 
+        {savedNote && (
+          <div role="status" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "12px 16px", borderRadius: 12, background: c.accentSoft, color: c.ink, fontWeight: 600 }}>
+            {savedNote}
+            <button type="button" onClick={() => setSavedNote(null)} aria-label="Dismiss" style={{ minHeight: 32, padding: "0 10px", borderRadius: 8, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.ink, cursor: "pointer" }}>
+              OK
+            </button>
+          </div>
+        )}
         {apps.error && <ErrorNotice title="Could not load your applications" detail={apps.error} />}
         {pages.error && (
           <ErrorNotice title="Could not load the pages" detail={pages.error} onRetry={() => setRefreshKey((k) => k + 1)} />
@@ -220,10 +257,27 @@ export function App() {
               }}
             >
               <Kpi label="Visits to this page" value={visits.loading ? "…" : formatInt(pageVisits)} />
-              <Kpi label="Clicks on this page" value={sections.loading ? "…" : formatInt(totalClicks)} />
-              <Kpi label={`Clicked ${noun}`} value={sections.loading ? "…" : formatInt(shown.length)} />
+              {view === "list" && <Kpi label="Clicks on this page" value={sections.loading ? "…" : formatInt(totalClicks)} />}
+              {view === "list" && <Kpi label={`Clicked ${noun}`} value={sections.loading ? "…" : formatInt(shown.length)} />}
+              <div style={{ marginLeft: "auto" }}>
+                <Segmented label="View" value={view} options={VIEWS} onChange={setView} />
+              </div>
             </div>
 
+            {view === "map" && filters && (
+              <Card label="Page map">
+                <SnapshotPanel
+                  filters={filters}
+                  page={activePage}
+                  pageVisits={pageVisits}
+                  refreshKey={refreshKey}
+                  inboxTick={inbox.tick}
+                  preferId={inbox.id}
+                />
+              </Card>
+            )}
+
+            {view === "list" && (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
               <Card
                 label="Ranking"
@@ -282,6 +336,7 @@ export function App() {
                 )}
               </Card>
             </div>
+            )}
           </>
         )}
       </main>

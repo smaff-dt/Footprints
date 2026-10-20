@@ -41,6 +41,7 @@ export function ShowOnPage(props: {
       kind: "footprints-page",
       v: 1,
       app: props.appName,
+      appId: props.filters.appId,
       page: props.page,
       url: props.sampleUrl || props.page.replace(/\*/g, ""),
       period: props.periodLabel,
