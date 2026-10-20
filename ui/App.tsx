@@ -13,12 +13,12 @@ import { GroupEditor, PagePicker } from "./components/PagePicker";
 import { ShowOnPage } from "./components/ShowOnPage";
 import { SnapshotPanel } from "./components/SnapshotPanel";
 import { Empty, ErrorNotice, Loading } from "./components/States";
-import { Device, Filters, GroupBy, Timeframe } from "./dql/queries";
-import { useApplications, usePages, usePageVisits, useSections } from "./hooks/data";
+import { Device, Filters, GroupBy, PAGE_LIMIT, Timeframe } from "./dql/queries";
+import { useApplications, usePages, usePageVisits, useScopePages, useSections } from "./hooks/data";
 import { formatInt } from "./lib/format";
 import { pageHost } from "./lib/labels";
 import { useSnapshotInbox } from "./lib/extension";
-import { choicesFor, labelForKey, loadGroups, newGroupId, PageGroup, storeGroups, StoredGroups } from "./lib/pages";
+import { choicesFor, describeRules, labelForKey, loadGroups, looseChoice, newGroupId, PageGroup, storeGroups, StoredGroups } from "./lib/pages";
 import { saveSnapshot, Snapshot } from "./lib/snapshots";
 import { usePersistentState } from "./lib/storage";
 import { c, GLOBAL_CSS } from "./theme";
@@ -91,15 +91,20 @@ export function App() {
   // Pages and page groups
   const pages = usePages(filters, refreshKey);
   const choices = useMemo(() => choicesFor(pages.data ?? [], groups.groups, appId), [pages.data, groups.groups, appId]);
+  // A page found by searching (or opened from a snapshot) may be outside the loaded list.
+  const loose = useMemo(() => looseChoice(page), [page]);
+  const choice = choices.find((ch) => ch.key === page) ?? (pages.data && pageHost(page) && pages.data.some((p) => pageHost(p.url) === pageHost(page)) ? loose : null);
   useEffect(() => {
-    if (pages.data && choices.length > 0 && !choices.some((ch) => ch.key === page)) {
+    if (pages.data && choices.length > 0 && !choice) {
       const firstPage = choices.find((ch) => ch.kind === "page") ?? choices[0];
       setPage(firstPage.key);
     }
-  }, [pages.data, choices, page, setPage]);
-  const choice = choices.find((ch) => ch.key === page && ch.templates.length > 0) ?? null;
+  }, [pages.data, choices, choice, setPage]);
   const activePage = choice ? choice.key : null;
-  const templates = useMemo(() => choice?.templates ?? null, [choice]);
+  const scope = choice?.scope ?? null;
+  // A group: its pages, most visited first (the first one is opened by "Show on the page").
+  const groupPages = useScopePages(filters, choice?.kind === "group" ? scope : null, refreshKey);
+  const sampleUrl = choice?.kind === "group" ? groupPages.data?.[0]?.url ?? "" : choice?.key ?? "";
 
   async function saveGroup(g: Omit<PageGroup, "id"> & { id?: string }) {
     setGroupSaving(true);
@@ -146,8 +151,8 @@ export function App() {
   useSnapshotInbox(onSnapshot);
 
   // One page
-  const visits = usePageVisits(filters, templates, refreshKey);
-  const sections = useSections(filters, view === "list" ? templates : null, groupBy, refreshKey);
+  const visits = usePageVisits(filters, scope, refreshKey);
+  const sections = useSections(filters, view === "list" ? scope : null, groupBy, refreshKey);
 
   useEffect(() => setSelectedKey(null), [appId, page, groupBy]);
 
@@ -214,19 +219,21 @@ export function App() {
             </h1>
             <p style={{ margin: "4px 0 0", color: c.muted }}>
               {choice
-                ? choice.kind === "group"
-                  ? `Page group · ${choice.templates.length} page${choice.templates.length === 1 ? "" : "s"} · ${pageHost(choice.sample || choice.templates[0])}`
-                  : pageHost(choice.key)
+                ? choice.kind === "group" && choice.group
+                  ? `Page group · ${describeRules(choice.group.rules)}${
+                      groupPages.data ? ` · ${groupPages.data.length >= PAGE_LIMIT ? `${formatInt(PAGE_LIMIT)}+` : formatInt(groupPages.data.length)} page${groupPages.data.length === 1 ? "" : "s"}` : ""
+                    }`
+                  : `${pageHost(choice.key)} · ${choice.key}`
                 : "Pick an application and one of its pages to see how visitors use it."}
             </p>
           </div>
-          {filters && choice && (
+          {filters && choice && scope && sampleUrl && (
             <ShowOnPage
               key={`${filters.appId}|${choice.key}|${filters.timeframe}|${filters.device}`}
               filters={filters}
               page={choice.key}
-              templates={choice.templates}
-              sampleUrl={choice.sample}
+              scope={scope}
+              sampleUrl={sampleUrl}
               appName={apps.data?.find((a) => a.id === appId)?.name ?? ""}
               periodLabel={TIMEFRAMES.find((t) => t.value === timeframe)?.label ?? ""}
               deviceLabel={device === "all" ? "All devices" : (DEVICES.find((d) => d.value === device)?.label ?? "")}
@@ -245,10 +252,13 @@ export function App() {
             disabled={!apps.data || apps.data.length === 0}
           />
           <PagePicker
+            filters={filters}
             choices={choices}
+            complete={!!pages.data && pages.data.length < PAGE_LIMIT}
             value={page}
+            current={choice}
             loading={pages.loading}
-            onChange={setPage}
+            onChange={(ch) => setPage(ch.key)}
             onNewGroup={() => {
               setGroupError(null);
               setEditing({ group: null });
@@ -266,8 +276,7 @@ export function App() {
           <GroupEditor
             key={editing.group?.id ?? "new"}
             group={editing.group}
-            appId={filters.appId}
-            pages={pages.data ?? []}
+            filters={filters}
             saving={groupSaving}
             error={groupError}
             onSave={saveGroup}
@@ -305,7 +314,7 @@ export function App() {
           </Card>
         )}
 
-        {activePage && (
+        {activePage && scope && (
           <>
             <div
               style={{
@@ -331,7 +340,7 @@ export function App() {
                 <SnapshotPanel
                   filters={filters}
                   page={activePage}
-                  templates={templates ?? []}
+                  scope={scope!}
                   pageVisits={pageVisits}
                   refreshKey={refreshKey}
                   inboxTick={inbox.tick}

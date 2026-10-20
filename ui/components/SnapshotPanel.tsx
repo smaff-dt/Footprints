@@ -3,7 +3,7 @@
  * one with its numbers for the current filters, renaming and deleting.
  */
 import { useEffect, useMemo, useState } from "react";
-import type { Device, Filters } from "../dql/queries";
+import type { Device, Filters, PageScope } from "../dql/queries";
 import { usePageElements, usePageVisits, useScrollDepth } from "../hooks/data";
 import { deleteSnapshot, listSnapshots, loadSnapshot, saveNames, Snapshot, SnapshotMeta } from "../lib/snapshots";
 import { deviceName, formatWhen } from "../lib/format";
@@ -16,8 +16,8 @@ export function SnapshotPanel(props: {
   filters: Filters;
   /** The page or group key snapshots are saved under. */
   page: string;
-  /** The page templates it covers. */
-  templates: string[];
+  /** The page, or the rules of the group. */
+  scope: PageScope;
   pageVisits: number;
   refreshKey: number;
   /** Changes when a new snapshot has been saved; `preferId` is then selected. */
@@ -74,7 +74,7 @@ export function SnapshotPanel(props: {
   // come from the visits on that kind of device, whatever the filter says.
   const snapDevice = snapshot && ["desktop", "tablet", "mobile"].includes(snapshot.device) ? (snapshot.device as Device) : null;
   const dataFilters = useMemo(() => (snapDevice ? { ...filters, device: snapDevice } : filters), [filters, snapDevice]);
-  const tpl = snapshot ? props.templates : null;
+  const tpl = snapshot ? props.scope : null;
   const elements = usePageElements(dataFilters, tpl, props.refreshKey);
   const scroll = useScrollDepth(dataFilters, tpl, props.refreshKey);
   const deviceVisits = usePageVisits(snapDevice && snapDevice !== filters.device ? dataFilters : null, tpl, props.refreshKey);

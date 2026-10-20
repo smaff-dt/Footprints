@@ -3,7 +3,7 @@
  * through the Footprints browser extension.
  */
 import { CSSProperties, useState } from "react";
-import { Filters } from "../dql/queries";
+import { Filters, PageScope } from "../dql/queries";
 import { loadPageElements, loadScrollDepth } from "../hooks/data";
 import { copyPayload, PagePayload, showOnPage, useExtensionInstalled } from "../lib/extension";
 import { c } from "../theme";
@@ -20,8 +20,8 @@ export function ShowOnPage(props: {
   filters: Filters;
   /** The page or group key, stored with snapshots. */
   page: string;
-  /** The page templates it covers. */
-  templates: string[];
+  /** The page, or the rules of the group. */
+  scope: PageScope;
   sampleUrl: string;
   appName: string;
   periodLabel: string;
@@ -34,8 +34,8 @@ export function ShowOnPage(props: {
   async function build(): Promise<PagePayload> {
     // Scroll depth is a plus: if it fails, the page still shows the clicks.
     const [elements, scroll] = await Promise.all([
-      loadPageElements(props.filters, props.templates),
-      loadScrollDepth(props.filters, props.templates).then(
+      loadPageElements(props.filters, props.scope),
+      loadScrollDepth(props.filters, props.scope).then(
         (s) => ({ ok: true as const, s }),
         (err: unknown) => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }),
       ),
@@ -46,7 +46,7 @@ export function ShowOnPage(props: {
       app: props.appName,
       appId: props.filters.appId,
       page: props.page,
-      url: props.sampleUrl || (props.templates[0] ?? "").replace(/\*/g, ""),
+      url: props.sampleUrl,
       period: props.periodLabel,
       device: props.deviceLabel,
       deviceKey: props.filters.device,

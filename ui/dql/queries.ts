@@ -58,40 +58,81 @@ function deviceFilter(device: Device): string {
 }
 
 /**
- * A page "template": the URL without query string, with identifiers in the
- * path replaced by `*`, so all product pages are one page:
- * /journeys/969, /product/OLJCESPC7Z and /order/c0000000-0000-4000-… become
- * /journeys/*, /product/* and /order/*.
- *
- * An identifier is a path segment that contains a digit and starts with
- * letters-then-digit (`969`, `OLJCESPC7Z`, `66VCHSJNUP`, UUIDs). Readable slugs
- * such as `top-10-telescopes` are kept. If an environment rejects this
- * pattern, queries fall back to replacing numbers only (see client.ts).
+ * Page fields, added to every query that looks at pages:
+ * - `fp_page`  the address without query string and fragment: one real page
+ *              (each product page is its own page);
+ * - `fp_host`, `fp_path`, `fp_query` and `fp_address` (the full address
+ *   without fragment), used by the rules of page groups.
  *
  * `view.url.full` follows route changes in single-page apps; `page.url.full`
  * is the fallback for classic multi-page sites.
  */
-// The address without query string ("?…") and fragment ("#…").
-const URL_EXPR = `splitString(splitString(coalesce(view.url.full, page.url.full), "?")[0], "#")[0]`;
-/**
- * Ways to turn an address into a page template, best first: a path segment
- * that contains a digit (`/product/OLJCESPC7Z`, `/order/12345`) becomes `*`.
- * Pattern support differs between environments, so the client falls back to
- * the next one when an environment rejects a pattern; the last one (numbers
- * only) works everywhere.
- */
-export const PAGE_EXPRS = [
-  `replacePattern(${URL_EXPR}, "'/' [a-zA-Z_-]{0,200} DIGIT [a-zA-Z0-9_-]{0,200}", "/*")`,
-  `replacePattern(${URL_EXPR}, "'/' ALPHA* DIGIT ALNUM*", "/*")`,
-  `replacePattern(${URL_EXPR}, "'/' DIGIT+", "/*")`,
-];
-const PAGE_EXPR = PAGE_EXPRS[0];
+const PAGE_FIELDS = lines(
+  "| fieldsAdd fp_address = splitString(coalesce(view.url.full, page.url.full), \"#\")[0]",
+  "| fieldsAdd fp_page = splitString(fp_address, \"?\")[0]",
+  "| fieldsAdd fp_host = splitString(fp_page, \"/\")[2]",
+  "| fieldsAdd fp_path_raw = substring(fp_page, from: stringLength(splitString(fp_page, \"/\")[0]) + 2 + stringLength(fp_host))",
+  "| fieldsAdd fp_path = if(isNull(fp_path_raw) or fp_path_raw == \"\", \"/\", else: fp_path_raw)",
+  "| fieldsAdd fp_query = if(fp_address != fp_page, substring(fp_address, from: stringLength(fp_page) + 1), else: \"\")",
+);
+
+/** Which part of the address a group rule looks at. */
+export type UrlPart = "address" | "host" | "path" | "query";
+export type RuleOp = "contains" | "not_contains" | "starts" | "ends" | "is";
+
+export interface PageRule {
+  part: UrlPart;
+  op: RuleOp;
+  value: string;
+}
+
+/** What the analysis covers: one page, or every page that matches all the rules of a group. */
+export type PageScope = { kind: "page"; url: string } | { kind: "group"; rules: PageRule[] };
+
+const PART_FIELD: Record<UrlPart, string> = { address: "fp_address", host: "fp_host", path: "fp_path", query: "fp_query" };
+
+/** The rule's text as compared: lower case; paths start with "/" and lose a trailing "/". */
+export function normaliseRuleValue(rule: PageRule): string {
+  let v = rule.value.trim().toLowerCase();
+  if (rule.part === "host") v = v.replace(/^[a-z]+:\/\//, "").replace(/\/.*$/, "");
+  if (rule.part === "query") v = v.replace(/^\?/, "");
+  if (rule.part === "path" && (rule.op === "is" || rule.op === "starts") && !v.startsWith("/")) v = `/${v}`;
+  if (rule.part === "path" && v.length > 1) v = v.replace(/\/+$/, "");
+  return v;
+}
+
+function ruleExpr(rule: PageRule): string {
+  const field = `lower(${PART_FIELD[rule.part]})`;
+  const v = normaliseRuleValue(rule);
+  switch (rule.op) {
+    case "contains":
+      return `contains(${field}, ${dqlString(v)})`;
+    case "not_contains":
+      return `not(contains(${field}, ${dqlString(v)}))`;
+    case "starts":
+      return `startsWith(${field}, ${dqlString(v)})`;
+    case "ends":
+      return rule.part === "path" ? `(endsWith(${field}, ${dqlString(v)}) or endsWith(${field}, ${dqlString(`${v}/`)}))` : `endsWith(${field}, ${dqlString(v)})`;
+    case "is":
+      return rule.part === "path" && v !== "/"
+        ? `(${field} == ${dqlString(v)} or ${field} == ${dqlString(`${v}/`)})`
+        : `${field} == ${dqlString(v)}`;
+  }
+}
+
+export function validRules(rules: PageRule[]): PageRule[] {
+  return rules.filter((r) => normaliseRuleValue(r) !== "" || (r.part === "query" && r.op === "is"));
+}
 
 /** Keeps the events of the chosen page, or of every page of a group. */
-function pagesFilter(pages: string[]): string {
-  if (pages.length === 0) throw new Error("No page selected");
-  if (pages.length === 1) return `| filter page_template == ${dqlString(pages[0])}`;
-  return `| filter in(page_template, array(${pages.map(dqlString).join(", ")}))`;
+function scopeFilter(scope: PageScope): string {
+  if (scope.kind === "page") {
+    if (!scope.url) throw new Error("No page selected");
+    return `| filter fp_page == ${dqlString(scope.url)}`;
+  }
+  const rules = validRules(scope.rules);
+  if (rules.length === 0) throw new Error("This page group has no rule");
+  return `| filter ${rules.map(ruleExpr).join(" and ")}`;
 }
 
 const CLICKS_ONLY = `| filter characteristics.has_user_interaction == true and interaction.type == "click"`;
@@ -131,30 +172,39 @@ export function applicationNamesQuery(): string {
   );
 }
 
-/** Pages of an application that received clicks, most visited first. */
-export function pagesQuery(f: Filters): string {
+/**
+ * Pages of an application that received clicks, most visited first: every
+ * real address (without query string), optionally only those containing
+ * `search`, or only those matching a group's rules.
+ */
+export function pagesQuery(f: Filters, opts: { search?: string; scope?: PageScope; limit?: number } = {}): string {
+  const search = opts.search?.trim().toLowerCase();
   return lines(
     `fetch user.events, ${fromClause(f.timeframe)}`,
     appFilter(f.appId),
     CLICKS_ONLY,
     deviceFilter(f.device),
-    `| fieldsAdd page_template = ${PAGE_EXPR}`,
-    "| filter isNotNull(page_template)",
-    "| summarize clicks = count(), visits = countDistinct(dt.rum.session.id), " +
-      "sample = takeAny(coalesce(view.url.full, page.url.full)), by: {page_template}",
+    PAGE_FIELDS,
+    "| filter isNotNull(fp_page)",
+    search ? `| filter contains(lower(fp_page), ${dqlString(search)})` : "",
+    opts.scope ? scopeFilter(opts.scope) : "",
+    "| summarize clicks = count(), visits = countDistinct(dt.rum.session.id), by: {fp_page}",
     "| sort visits desc",
-    "| limit 1000",
+    `| limit ${opts.limit ?? PAGE_LIMIT}`,
   );
 }
 
+/** How many pages the page list loads; beyond that, searching asks Dynatrace. */
+export const PAGE_LIMIT = 1000;
+
 /** Visits to one page (or group): the denominator of every click rate. */
-export function pageVisitsQuery(f: Filters, pages: string[]): string {
+export function pageVisitsQuery(f: Filters, scope: PageScope): string {
   return lines(
     `fetch user.events, ${fromClause(f.timeframe)}`,
     appFilter(f.appId),
     deviceFilter(f.device),
-    `| fieldsAdd page_template = ${PAGE_EXPR}`,
-    pagesFilter(pages),
+    PAGE_FIELDS,
+    scopeFilter(scope),
     "| summarize visits = countDistinct(dt.rum.session.id)",
   );
 }
@@ -192,13 +242,13 @@ export const SCROLL_STEP = 50;
  * real environment, so the value of "y" is read from the field's text form,
  * which works for every one of these shapes.
  */
-export function scrollDepthQuery(f: Filters, pages: string[]): string {
+export function scrollDepthQuery(f: Filters, scope: PageScope): string {
   return lines(
     `fetch user.events, ${fromClause(f.timeframe)}`,
     appFilter(f.appId),
     deviceFilter(f.device),
-    `| fieldsAdd page_template = ${PAGE_EXPR}`,
-    pagesFilter(pages),
+    PAGE_FIELDS,
+    scopeFilter(scope),
     POSITION_Y,
     "| fieldsAdd window_h = toDouble(browser.window.height), pos_y = toDouble(pos_y)",
     "| fieldsAdd page_scroll = interaction.type == \"scroll\" and (isNull(ui_element.tag_name) or ui_element.tag_name == \"html\" or ui_element.tag_name == \"body\")",
@@ -224,7 +274,7 @@ export function scrollDepthQuery(f: Filters, pages: string[]): string {
  *   Clicks outside any component are "(other)".
  * - "elements": one row per clicked element (its full xpath).
  */
-export function sectionsQuery(f: Filters, pages: string[], groupBy: GroupBy): string {
+export function sectionsQuery(f: Filters, scope: PageScope, groupBy: GroupBy): string {
   const sectionExpr =
     groupBy === "sections"
       ? lines(
@@ -240,8 +290,8 @@ export function sectionsQuery(f: Filters, pages: string[], groupBy: GroupBy): st
     appFilter(f.appId),
     CLICKS_ONLY,
     deviceFilter(f.device),
-    `| fieldsAdd page_template = ${PAGE_EXPR}`,
-    pagesFilter(pages),
+    PAGE_FIELDS,
+    scopeFilter(scope),
     sectionExpr,
     "| summarize clicks = count(), visits = countDistinct(dt.rum.session.id), " +
       "name = takeAny(coalesce(ui_element.custom_name, ui_element.name, ui_element.detected_name)), " +

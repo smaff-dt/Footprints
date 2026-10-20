@@ -10,6 +10,7 @@ import {
   Filters,
   GroupBy,
   pagesQuery,
+  PageScope,
   pageVisitsQuery,
   SCROLL_STEP,
   scrollDepthQuery,
@@ -65,27 +66,31 @@ export function useApplications(): QueryState<Application[]> {
 // ── Pages ────────────────────────────────────────────────────────────────────
 
 export interface PageSummary {
-  /** The page template, e.g. https://site/journeys/*\/book */
+  /** The page's address without query string, e.g. https://site/product/2ZYFJ3GM2N */
   url: string;
-  /** One real address of that page, used to open it in the browser. */
-  sample: string;
   clicks: number;
   visits: number;
 }
 
 function mapPages(rows: Row[]): PageSummary[] {
   return rows
-    .map((r) => ({
-      url: str(r["page_template"]),
-      sample: str(r["sample"]),
-      clicks: num(r["clicks"]),
-      visits: num(r["visits"]),
-    }))
+    .map((r) => ({ url: str(r["fp_page"]), clicks: num(r["clicks"]), visits: num(r["visits"]) }))
     .filter((p) => p.url);
 }
 
+/** The most visited pages with clicks (up to PAGE_LIMIT). */
 export function usePages(filters: Filters | null, refreshKey: number): QueryState<PageSummary[]> {
   return useQuery(filters ? pagesQuery(filters) : null, mapPages, refreshKey);
+}
+
+/** Pages whose address contains `text`, asked to Dynatrace (for lists longer than PAGE_LIMIT). */
+export async function searchPages(filters: Filters, text: string, signal?: AbortSignal): Promise<PageSummary[]> {
+  return mapPages(await runQuery(pagesQuery(filters, { search: text, limit: 200 }), signal));
+}
+
+/** The pages a group covers, most visited first. */
+export function useScopePages(filters: Filters | null, scope: PageScope | null, refreshKey: number): QueryState<PageSummary[]> {
+  return useQuery(filters && scope ? pagesQuery(filters, { scope }) : null, mapPages, refreshKey);
 }
 
 // ── One page ─────────────────────────────────────────────────────────────────
@@ -94,8 +99,8 @@ function mapVisits(rows: Row[]): number {
   return num(rows[0]?.["visits"]);
 }
 
-export function usePageVisits(filters: Filters | null, pages: string[] | null, refreshKey: number): QueryState<number> {
-  return useQuery(filters && pages && pages.length ? pageVisitsQuery(filters, pages) : null, mapVisits, refreshKey);
+export function usePageVisits(filters: Filters | null, scope: PageScope | null, refreshKey: number): QueryState<number> {
+  return useQuery(filters && scope ? pageVisitsQuery(filters, scope) : null, mapVisits, refreshKey);
 }
 
 export interface Section {
@@ -134,16 +139,16 @@ export interface PageElement {
 }
 
 /** Every clicked element of a page, for drawing on the live page. */
-export async function loadPageElements(filters: Filters, pages: string[]): Promise<PageElement[]> {
-  return mapPageElements(await runQuery(sectionsQuery(filters, pages, "elements")));
+export async function loadPageElements(filters: Filters, scope: PageScope): Promise<PageElement[]> {
+  return mapPageElements(await runQuery(sectionsQuery(filters, scope, "elements")));
 }
 
-export function usePageElements(filters: Filters | null, pages: string[] | null, refreshKey: number): QueryState<PageElement[]> {
-  return useQuery(filters && pages && pages.length ? sectionsQuery(filters, pages, "elements") : null, mapPageElements, refreshKey);
+export function usePageElements(filters: Filters | null, scope: PageScope | null, refreshKey: number): QueryState<PageElement[]> {
+  return useQuery(filters && scope ? sectionsQuery(filters, scope, "elements") : null, mapPageElements, refreshKey);
 }
 
-export function useScrollDepth(filters: Filters | null, pages: string[] | null, refreshKey: number): QueryState<ScrollDepth> {
-  return useQuery(filters && pages && pages.length ? scrollDepthQuery(filters, pages) : null, mapScrollDepth, refreshKey);
+export function useScrollDepth(filters: Filters | null, scope: PageScope | null, refreshKey: number): QueryState<ScrollDepth> {
+  return useQuery(filters && scope ? scrollDepthQuery(filters, scope) : null, mapScrollDepth, refreshKey);
 }
 
 function mapPageElements(rows: Row[]): PageElement[] {
@@ -176,8 +181,8 @@ export interface ScrollDepth {
 }
 
 /** How far down the page visits got, for exposure on the live page. */
-export async function loadScrollDepth(filters: Filters, pages: string[]): Promise<ScrollDepth> {
-  return mapScrollDepth(await runQuery(scrollDepthQuery(filters, pages)));
+export async function loadScrollDepth(filters: Filters, scope: PageScope): Promise<ScrollDepth> {
+  return mapScrollDepth(await runQuery(scrollDepthQuery(filters, scope)));
 }
 
 function mapScrollDepth(rows: Row[]): ScrollDepth {
@@ -190,10 +195,10 @@ function mapScrollDepth(rows: Row[]): ScrollDepth {
 
 export function useSections(
   filters: Filters | null,
-  pages: string[] | null,
+  scope: PageScope | null,
   groupBy: GroupBy,
   refreshKey: number,
 ): QueryState<Section[]> {
-  const query = filters && pages && pages.length ? sectionsQuery(filters, pages, groupBy) : null;
+  const query = filters && scope ? sectionsQuery(filters, scope, groupBy) : null;
   return useQuery(query, groupBy === "sections" ? mapSections : mapElements, refreshKey);
 }

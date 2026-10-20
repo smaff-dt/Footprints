@@ -45,12 +45,20 @@ always come from visits on that kind of device.
 
 ### Choosing pages
 
-Addresses are grouped into page templates automatically: identifiers in the
-path (`/product/OLJCESPC7Z`, `/order/12345`) become `*`, so all product pages
-are one entry. The page picker has a **search** box, and **page groups** you
-create with dropdowns: *pages whose address contains `/product/`*, or *is
-exactly `/`* for the home page. A group covers every page its rule matches;
-groups are saved privately in Dynatrace and follow you across browsers.
+The page picker lists every page with clicks in the period — each real
+address without its query string, so every product page is its own entry —
+most visited first. Scroll the list, or type to filter it; when there are more
+than 1,000 pages, typing searches all of them in Dynatrace.
+
+To analyse several pages together, create a **page group** with dropdowns:
+choose the part of the address (path, query parameters, host or full
+address), a rule (contains, is exactly, starts with, ends with, does not
+contain) and type the text. Rules can be combined; a page belongs to the group
+when it matches all of them. Examples: *Path is exactly `/`* for the home
+page, *Path contains `/product/`* for every product page, *Query parameters
+contain `utm_source=newsletter`* for visits from the newsletter. A preview
+shows which pages match before saving. Groups are saved privately in
+Dynatrace and follow you across browsers.
 
 ### Metrics
 
@@ -176,7 +184,7 @@ ui/
   components/SnapshotPanel  snapshots of a page: list, load, rename, delete
   components/SnapshotView   the page map: metric dropdown, colored areas, any element selectable, sidebar
   components/PagePicker   searchable page list and the page group editor
-  lib/pages.ts            page groups: matching rules and storage
+  lib/pages.ts            pages and page groups (rules, storage)
   components/ShowOnPage   the "Show on the page" button and its fallback
   lib/snapshots.ts        snapshots as Dynatrace documents
   lib/snapshotMath.ts     matching recorded clicks to the map; metrics; exposure
