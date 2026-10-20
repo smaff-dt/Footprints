@@ -6,7 +6,7 @@
  * credentials: the app reads the data, the extension only draws it.
  */
 import { useEffect, useState } from "react";
-import type { PageElement } from "../hooks/data";
+import type { PageElement, ScrollDepth } from "../hooks/data";
 
 export interface PagePayload {
   kind: "footprints-page";
@@ -19,6 +19,10 @@ export interface PagePayload {
   deviceKey: string;
   pageVisits: number;
   elements: PageElement[];
+  /** How far down the page visits got; null when not available. */
+  scroll: ScrollDepth | null;
+  /** Why scroll depth is missing, when its query failed. */
+  scrollError: string | null;
 }
 
 interface ExtensionMessage {

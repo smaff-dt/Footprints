@@ -4,7 +4,7 @@
  */
 import { CSSProperties, useState } from "react";
 import { Filters } from "../dql/queries";
-import { loadPageElements } from "../hooks/data";
+import { loadPageElements, loadScrollDepth } from "../hooks/data";
 import { copyPayload, PagePayload, showOnPage, useExtensionInstalled } from "../lib/extension";
 import { c } from "../theme";
 
@@ -29,7 +29,14 @@ export function ShowOnPage(props: {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
 
   async function build(): Promise<PagePayload> {
-    const elements = await loadPageElements(props.filters, props.page);
+    // Scroll depth is a plus: if it fails, the page still shows the clicks.
+    const [elements, scroll] = await Promise.all([
+      loadPageElements(props.filters, props.page),
+      loadScrollDepth(props.filters, props.page).then(
+        (s) => ({ ok: true as const, s }),
+        (err: unknown) => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }),
+      ),
+    ]);
     return {
       kind: "footprints-page",
       v: 1,
@@ -41,6 +48,8 @@ export function ShowOnPage(props: {
       deviceKey: props.filters.device,
       pageVisits: props.pageVisits,
       elements,
+      scroll: scroll.ok && scroll.s.visits > 0 ? scroll.s : null,
+      scrollError: scroll.ok ? null : scroll.error,
     };
   }
 

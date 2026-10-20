@@ -11,6 +11,8 @@ import {
   GroupBy,
   pagesQuery,
   pageVisitsQuery,
+  SCROLL_STEP,
+  scrollDepthQuery,
   sectionsQuery,
 } from "../dql/queries";
 import { elementLabel, sectionLabel } from "../lib/labels";
@@ -151,6 +153,25 @@ export async function loadPageElements(filters: Filters, page: string): Promise<
     });
   }
   return out;
+}
+
+export interface ScrollDepth {
+  /** Pixels per step of the distribution. */
+  step: number;
+  /** [deepest point seen (start of the step, px), visits] pairs, shallowest first. */
+  steps: [number, number][];
+  /** Visits counted in the distribution. */
+  visits: number;
+}
+
+/** How far down the page visits got, for exposure on the live page. */
+export async function loadScrollDepth(filters: Filters, page: string): Promise<ScrollDepth> {
+  const rows = await runQuery(scrollDepthQuery(filters, page));
+  const steps: [number, number][] = rows
+    .map((r): [number, number] => [num(r["depth"]), num(r["visits"])])
+    .filter(([d, v]) => d >= 0 && v > 0)
+    .sort((a, b) => a[0] - b[0]);
+  return { step: SCROLL_STEP, steps, visits: steps.reduce((s, [, v]) => s + v, 0) };
 }
 
 export function useSections(

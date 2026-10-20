@@ -276,6 +276,7 @@
     payload: null,
     detail: 2,
     showDots: true,
+    showFolds: true,
     collapsed: false,
     // "inspect": point at the page to read its numbers, clicks do not reach the site.
     // "browse": the site works normally.
@@ -342,6 +343,12 @@
     .minis { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 6px; margin-top: 8px; }
     .mini { background: #fff; border-radius: 8px; padding: 6px; font-size: 11px; color: #5B6270; }
     .mini b { display: block; font-size: 14px; color: #16191F; }
+    .expo { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 6px; margin-top: 8px; }
+    .expo > div { background: #EEF1FD; border-radius: 8px; padding: 6px 8px; font-size: 11px; line-height: 1.3; }
+    .expo b { display: block; font-size: 18px; color: #2F4BD8; }
+    .fold { position: absolute; left: 0; height: 0; border-top: 2px dashed rgba(47,75,216,.85); }
+    .fold span { position: absolute; left: 8px; top: -21px; padding: 2px 8px; border-radius: 6px 6px 0 0;
+      background: #2F4BD8; color: #fff; font-size: 11px; font-weight: 700; white-space: nowrap; }
   `;
 
   function ensureHost() {
@@ -456,6 +463,52 @@
     return state.found.reduce((s, f) => s + f.row.clicks, 0) + state.missing.reduce((s, r) => s + r.clicks, 0);
   }
 
+  // ── Exposure: how many visits scrolled far enough to see something ───────
+
+  /** Share of visits whose deepest point seen is at least `px` from the top. */
+  function reachAt(px) {
+    const s = state.payload && state.payload.scroll;
+    if (!s || !s.visits) return null;
+    if (px <= 0) return 1;
+    let reached = 0;
+    for (const [depth, visits] of s.steps) {
+      if (depth >= px) reached += visits;
+      else if (depth + s.step > px) reached += (visits * (depth + s.step - px)) / s.step; // partly inside this step
+    }
+    return Math.min(1, reached / s.visits);
+  }
+
+  /** Counted as seen when half of it — or its first 300 px, if taller — came into view. */
+  function exposureOf(el) {
+    const b = pageBox(el);
+    return reachAt(b.y + Math.min(b.h / 2, 300));
+  }
+
+  /** Depth (px) that a given share of visits reaches, e.g. 0.5 → half the visits get this far. */
+  function depthReachedBy(share) {
+    const s = state.payload && state.payload.scroll;
+    if (!s || !s.visits) return null;
+    let lo = 0;
+    let hi = s.steps.length ? s.steps[s.steps.length - 1][0] + s.step : 0;
+    if (reachAt(hi) >= share) return hi;
+    for (let i = 0; i < 30; i++) {
+      const mid = (lo + hi) / 2;
+      if (reachAt(mid) >= share) lo = mid;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  function exposureMinis(seen, clickers) {
+    if (seen === null) return "";
+    const seenVisits = seen * state.payload.pageVisits;
+    const whenSeen = clickers !== null && seenVisits > 0 ? pct(Math.min(clickers, seenVisits), seenVisits) : "–";
+    return `<div class="expo">
+      <div><span class="muted">Seen by</span><b>${pct(seen, 1)}</b><span class="muted">of visits</span></div>
+      ${clickers !== null ? `<div><span class="muted">Clicked by</span><b>${whenSeen}</b><span class="muted">of those who saw it</span></div>` : ""}
+    </div>`;
+  }
+
   // ── Inspect: point at the page to read its numbers ────────────────────────
 
   function targetAt(x, y) {
@@ -495,6 +548,7 @@
         ${area ? `<div class="muted">in ${esc(area.name)}</div>` : ""}
         <div class="big">${pct(t.row.visits, p.pageVisits)}</div>
         <div class="muted">of visits to this page click it</div>
+        ${exposureMinis(exposureOf(t.el), t.row.visits)}
         <div class="minis">
           <div class="mini">Visits<b>${fmt(t.row.visits)}</b></div>
           <div class="mini">Clicks<b>${fmt(t.row.clicks)}</b></div>
@@ -511,20 +565,33 @@
         .slice(0, 5)
         .map((f) => `<li>${esc(elementName(f.el, f.row.label))} — ${pct(f.row.visits, p.pageVisits)} of visits</li>`)
         .join("");
+      const seen = exposureOf(a.el);
+      const per100 =
+        seen !== null && seen * p.pageVisits > 0 ? Math.round((100 * a.clicks) / (seen * p.pageVisits)) : null;
       return `<div class="detail">
         <div class="kicker">Area</div>
         <strong>${esc(a.name)}</strong>
-        <div class="big">${pct(a.clicks, total)}</div>
-        <div class="muted">of the page's clicks happen here (${fmt(a.clicks)} clicks)</div>
+        ${
+          seen !== null
+            ? `<div class="big">${pct(seen, 1)}</div>
+               <div class="muted">of visits scroll far enough to see it</div>`
+            : ""
+        }
+        <div class="minis" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+          <div class="mini">Share of clicks<b>${pct(a.clicks, total)}</b></div>
+          <div class="mini">${per100 !== null ? `Clicks per 100 views<b>${fmt(per100)}</b>` : `Clicks<b>${fmt(a.clicks)}</b>`}</div>
+        </div>
         <div style="margin-top:8px;font-weight:600">Most clicked inside</div>
         <ul>${top}</ul>
         ${pinnedNote}</div>`;
     }
     const area = areaContaining(t.el);
+    const seen = exposureOf(t.el);
     return `<div class="detail">
       <div class="kicker">Not clicked</div>
       <strong>${esc(elementName(t.el, ""))}</strong>
       <div class="muted" style="margin-top:4px">Nobody clicked here in this period${area ? `, inside ${esc(area.name)}` : ""}.</div>
+      ${exposureMinis(seen, null)}
       ${pinnedNote}</div>`;
   }
 
@@ -595,12 +662,27 @@
           .join("")
       : "";
 
+    const hasScroll = !!(p.scroll && p.scroll.visits);
+    const pageW = Math.max(document.documentElement.scrollWidth, window.innerWidth);
+    const foldHtml =
+      hasScroll && state.showFolds
+        ? [0.75, 0.5, 0.25]
+            .map((share) => [share, depthReachedBy(share)])
+            .filter(([, d]) => d !== null && d > 0)
+            .map(
+              ([share, d]) => `<div class="fold" style="top:${Math.round(d)}px;width:${pageW}px">
+                <span>${Math.round(share * 100)}% of visits see down to here</span></div>`,
+            )
+            .join("")
+        : "";
+
     const listHtml = ranked
       .slice(0, 10)
       .map(
         (a) => `<li><button type="button" class="item" data-area="${a.key}">
           <span class="row"><strong>${esc(a.name)}</strong><span>${pct(a.clicks, total)}</span></span>
-          <span class="bar" style="display:block"><span style="width:${Math.max(3, Math.round((100 * a.clicks) / maxClicks))}%"></span></span></button></li>`,
+          <span class="bar" style="display:block"><span style="width:${Math.max(3, Math.round((100 * a.clicks) / maxClicks))}%"></span></span>
+          ${hasScroll ? `<span class="muted" style="display:block;font-size:11px;margin-top:3px">Seen by ${pct(exposureOf(a.el), 1)} of visits</span>` : ""}</button></li>`,
       )
       .join("");
 
@@ -622,6 +704,15 @@
     }
     if (state.rest && state.rest.clicks) {
       notes.push(`${pct(state.rest.clicks, total)} of the clicks are on empty parts of the page, outside every area.`);
+    }
+    if (!hasScroll) {
+      notes.push(
+        p.scrollError
+          ? `How far visitors scroll could not be loaded, so “seen by” is not shown. (${esc(p.scrollError)})`
+          : "No scroll data for this page, so “seen by” is not shown.",
+      );
+    } else if (p.deviceKey === "all") {
+      notes.push("“Seen by” mixes desktop and mobile, whose pages have very different lengths. Choose one device in Footprints for exact numbers.");
     }
     const w = window.innerWidth;
     if ((p.deviceKey === "desktop" && w < 1024) || (p.deviceKey === "mobile" && w >= 768) || (p.deviceKey === "tablet" && (w < 768 || w >= 1024))) {
@@ -649,12 +740,13 @@
           <input id="fp-detail" type="range" min="1" max="5" step="1" value="${state.detail}" />
           <div class="scale"><span>Fewer, larger areas</span><span>More, smaller</span></div>
           <label style="font-weight:500"><input type="checkbox" data-act="dots" ${state.showDots ? "checked" : ""}/> Show clicked elements</label>
+          ${hasScroll ? `<label style="font-weight:500;margin-top:4px"><input type="checkbox" data-act="folds" ${state.showFolds ? "checked" : ""}/> Show how far visitors scroll</label>` : ""}
           <ol aria-label="Most clicked areas">${listHtml}</ol>
           ${notes.map((n) => `<div class="note">${n}</div>`).join("")}
         </div>`;
 
     root.innerHTML = `<style>${CSS}</style>
-      <div class="layer">${areaHtml}${dotHtml}<div id="fp-hl" class="hl"></div></div>
+      <div class="layer">${areaHtml}${foldHtml}${dotHtml}<div id="fp-hl" class="hl"></div></div>
       ${inspect ? `<div class="capture" id="fp-capture"></div>` : ""}
       ${panelHtml}`;
     wire();
@@ -711,6 +803,8 @@
     const act = (name, fn) => root.querySelectorAll(`[data-act="${name}"]`).forEach((n) => n.addEventListener("click", fn));
     const dots = root.querySelector('[data-act="dots"]');
     if (dots) dots.addEventListener("change", () => ((state.showDots = dots.checked), render()));
+    const folds = root.querySelector('[data-act="folds"]');
+    if (folds) folds.addEventListener("change", () => ((state.showFolds = folds.checked), render()));
     act("inspect", () => ((state.mode = "inspect"), render()));
     act("browse", () => ((state.mode = "browse"), (state.hover = null), (state.pinned = null), render()));
     act("collapse", () => ((state.collapsed = true), render()));

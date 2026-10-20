@@ -130,6 +130,43 @@ export function pageVisitsQuery(f: Filters, page: string): string {
   );
 }
 
+/** Width of one step of the scroll-depth distribution, in pixels. */
+export const SCROLL_STEP = 50;
+
+/**
+ * How far down the page each visit got: the distribution of the deepest
+ * point seen, in steps of SCROLL_STEP pixels.
+ *
+ * - A scroll of the page records its scroll position in `positions` (y, in
+ *   pixels from the top of the page). The deepest point seen is that
+ *   position plus the browser window height. Scrolls inside an element
+ *   (a carousel, a menu) are left out: only `html`/`body` count.
+ * - A click records where it happened on the page, which was on screen.
+ * - Any other event means the visit saw at least the first screen.
+ *
+ * `positions` is an array on some events and a single record on others,
+ * and its numbers can arrive as text: the expression handles all of these.
+ */
+export function scrollDepthQuery(f: Filters, page: string): string {
+  const y = "toDouble(coalesce(arrayLast(positions)[y], positions[y]))";
+  return lines(
+    `fetch user.events, ${fromClause(f.timeframe)}`,
+    appFilter(f.appId),
+    deviceFilter(f.device),
+    `| fieldsAdd page_template = ${PAGE_EXPR}`,
+    `| filter page_template == ${dqlString(page)}`,
+    "| fieldsAdd window_h = toDouble(browser.window.height), pos_y = " + y,
+    "| fieldsAdd page_scroll = interaction.type == \"scroll\" and (isNull(ui_element.tag_name) or ui_element.tag_name == \"html\" or ui_element.tag_name == \"body\")",
+    "| fieldsAdd seen = if(page_scroll and isNotNull(pos_y), pos_y + window_h, " +
+      "else: if(interaction.type == \"click\" and isNotNull(pos_y), pos_y, else: window_h))",
+    "| summarize seen = max(seen), by: {dt.rum.session.id}",
+    "| filter isNotNull(seen) and seen > 0",
+    `| summarize visits = count(), by: {depth = bin(seen, ${SCROLL_STEP})}`,
+    "| sort depth asc",
+    "| limit 2000",
+  );
+}
+
 /**
  * Clicks and visits per section of a page.
  *

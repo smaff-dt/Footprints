@@ -36,6 +36,31 @@ It reads the user interactions captured by Dynatrace Real User Monitoring
    **Use the site** to navigate normally.
 4. A **Detail** slider switches between fewer, larger areas and more, smaller
    ones.
+5. **Seen by (exposure)**: how many visits scrolled far enough to see each
+   area or element. Combined with clicks it tells apart "nobody gets there"
+   from "people see it but do not care":
+   - *Seen by*: share of visits that saw it;
+   - *Clicked by … of those who saw it*: visits that clicked ÷ visits that saw it;
+   - for areas, *clicks per 100 views*.
+
+   Dashed lines on the page mark where 75%, 50% and 25% of visits stop
+   scrolling.
+
+### How exposure is measured
+
+For every visit to the page, Footprints takes the deepest point seen:
+the page's scroll position plus the browser window height, for each scroll of
+the page itself (scrolls inside a carousel or a menu are left out); the
+position of each click; at least the first screen for any visit. The app sends
+the distribution of these depths to the extension, which knows where every
+area sits on the live page. An area counts as seen when half of it — or its
+first 300 px, if it is taller — came into view.
+
+Page lengths differ a lot between desktop and mobile, so choose one device for
+exact numbers, and look at the page in a window of the same kind (the panel
+warns when the window does not match). Only vertical scrolling of the page is
+measured: slides hidden inside a horizontal carousel count as seen when the
+carousel is.
 
 If the app cannot reach the extension, it offers **Copy page data**: open the
 page, click the Footprints icon in the browser toolbar and choose
@@ -155,8 +180,9 @@ ui/
 - On sites without component tags, automatic sections are not useful yet (see
   phase 2).
 - "Visits" are RUM sessions.
-- On the live page, areas show their **share of clicks**. Visits per area
-  (how many visits clicked somewhere in it) come in step 3.
+- On the live page, areas show their **share of clicks** and **seen by**. The
+  share of visits that clicked somewhere in an area (not only on one element)
+  comes in step 3.
 - Elements that are not on screen when the page opens (closed menus, pop-ups,
   content that changed since the clicks happened) cannot be drawn; the panel
   says how many clicks that concerns.
@@ -175,4 +201,5 @@ python3 tests/overlay/run.py         # finds elements, builds areas at each deta
 python3 tests/overlay/e2e.py         # real extension: app → new tab → overlay → reload
 python3 tests/overlay/frame_test.py  # same, from a sandboxed frame like the Dynatrace app
 python3 tests/overlay/inspect_test.py # inspect: numbers on hover, clicks blocked, scrolling works
+python3 tests/overlay/exposure_test.py # exposure from a known scroll distribution (carousel at the bottom)
 ```
