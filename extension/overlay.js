@@ -437,18 +437,47 @@
   const KINDS = { a: "link", button: "button", input: "field", select: "dropdown", textarea: "text box", img: "image", label: "label" };
 
   /** What the element says on screen: its label, alt text, or visible text. */
+  function ownText(n) {
+    return (
+      n.getAttribute("aria-label") ||
+      n.getAttribute("alt") ||
+      n.getAttribute("title") ||
+      (n.innerText || "").split("\n").map((s) => s.trim()).find(Boolean) ||
+      n.getAttribute("placeholder") ||
+      n.getAttribute("value") ||
+      ""
+    );
+  }
+
+  /**
+   * A name for an element with no text of its own (typically a product
+   * picture): the image's alt text, or the text of the small card around it.
+   */
+  function nearbyText(el) {
+    const img = el.querySelector("img[alt]");
+    if (img && img.alt.trim()) return img.alt;
+    const b = pageBox(el);
+    const pageW = Math.max(document.documentElement.scrollWidth, window.innerWidth);
+    for (let a = el.parentElement, i = 0; a && a !== document.body && i < 5; a = a.parentElement, i++) {
+      const ab = pageBox(a);
+      if (ab.h > Math.max(700, b.h * 4) || ab.w > pageW * 0.6) break; // stop before whole sections
+      const heading = a.querySelector(HEADINGS);
+      const t = (heading && heading.textContent.trim()) || ownText(a);
+      if (t) return t;
+    }
+    return "";
+  }
+
   function elementName(el, fallback) {
-    const own =
-      el.getAttribute("aria-label") ||
-      el.getAttribute("alt") ||
-      el.getAttribute("title") ||
-      (el.innerText || "").split("\n").map((s) => s.trim()).find(Boolean) ||
-      el.getAttribute("placeholder") ||
-      el.getAttribute("value") ||
-      "";
-    const kind = KINDS[el.localName] || (el.closest("a") ? "link" : el.closest("button") ? "button" : "element");
+    const own = ownText(el);
+    const hasPicture = !!el.querySelector("img, picture, svg, video, canvas") || el.localName === "img";
+    const kind =
+      KINDS[el.localName] ||
+      (el.closest("a") ? "link" : el.closest("button") ? "button" : hasPicture ? "image" : "element");
     if (own) return `${clip(own, 40)} (${kind})`;
-    return fallback || kind.charAt(0).toUpperCase() + kind.slice(1);
+    const near = nearbyText(el);
+    if (near) return `${clip(near, 40)} (${kind})`;
+    return fallback && fallback !== "Area" ? fallback : kind.charAt(0).toUpperCase() + kind.slice(1);
   }
 
   function areaContaining(node) {
@@ -852,12 +881,31 @@
     schedule();
   }).observe(document.documentElement, { childList: true, subtree: true });
 
+  /**
+   * The first detail level where no single area takes more than 75% of the
+   * clicks, so the page never opens as one big "Main content" block that says
+   * nothing. If no level gets there, the level with the most areas.
+   */
+  function startingDetail() {
+    let best = { detail: 2, count: -1 };
+    for (let d = 1; d <= 5; d++) {
+      state.detail = d;
+      buildAreas();
+      const total = state.areas.reduce((s, a) => s + a.clicks, 0);
+      const top = Math.max(0, ...state.areas.map((a) => a.clicks));
+      if (state.areas.length >= 2 && total > 0 && top / total <= 0.75) return d;
+      if (state.areas.length > best.count) best = { detail: d, count: state.areas.length };
+    }
+    return best.detail;
+  }
+
   function show(payload) {
     state.payload = payload;
     state.hover = null;
     state.pinned = null;
     state.mode = "inspect";
     locate();
+    state.detail = startingDetail();
     render();
     // Content often keeps loading after the page is "complete".
     setTimeout(schedule, 1500);

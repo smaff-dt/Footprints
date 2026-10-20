@@ -35,7 +35,8 @@ It reads the user interactions captured by Dynatrace Real User Monitoring
    clicks do not reach the site, but the page still scrolls. Switch to
    **Use the site** to navigate normally.
 4. A **Detail** slider switches between fewer, larger areas and more, smaller
-   ones.
+   ones. The page opens at the first level where no single area takes more
+   than 75% of the clicks, so it never opens as one big block.
 5. **Seen by (exposure)**: how many visits scrolled far enough to see each
    area or element. Combined with clicks it tells apart "nobody gets there"
    from "people see it but do not care":
@@ -202,4 +203,5 @@ python3 tests/overlay/e2e.py         # real extension: app → new tab → overl
 python3 tests/overlay/frame_test.py  # same, from a sandboxed frame like the Dynatrace app
 python3 tests/overlay/inspect_test.py # inspect: numbers on hover, clicks blocked, scrolling works
 python3 tests/overlay/exposure_test.py # exposure from a known scroll distribution (carousel at the bottom)
+python3 tests/overlay/autodetail_test.py # product pictures named from their card; sensible starting detail
 ```
