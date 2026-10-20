@@ -74,6 +74,22 @@ export function SnapshotView(props: {
   const [sidebar, setSidebar] = useState(true);
   const [hover, setHover] = useState<Hover>(null);
   const [pinned, setPinned] = useState<Target | null>(null);
+  // Areas hidden from the picture (by key, so the choice survives a change of detail).
+  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
+  const toggleArea = (key: string) =>
+    setHidden((h) => {
+      const next = new Set(h);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  useEffect(() => setHidden(new Set()), [snapshot]);
+  // Esc clears the selection.
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setPinned(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // A new snapshot or new data: start again from a sensible detail level.
@@ -137,7 +153,7 @@ export function SnapshotView(props: {
     });
     if (best >= 0) return { kind: "element", index: best };
     let area: AreaStat | null = null;
-    for (const s of stats) if (contains(s.area.box, x, y) && (!area || s.area.box.w * s.area.box.h < area.area.box.w * area.area.box.h)) area = s;
+    for (const s of stats) if (!hidden.has(s.area.key) && contains(s.area.box, x, y) && (!area || s.area.box.w * s.area.box.h < area.area.box.w * area.area.box.h)) area = s;
     return area ? { kind: "area", id: area.area.id } : null;
   }
 
@@ -147,6 +163,10 @@ export function SnapshotView(props: {
   }
 
   function focusArea(id: string) {
+    if (pinned?.kind === "area" && pinned.id === id) {
+      setPinned(null); // a second click deselects
+      return;
+    }
     setPinned({ kind: "area", id });
     const node = canvasRef.current?.querySelector<HTMLElement>(`[data-area="${CSS.escape(id)}"]`);
     node?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -283,7 +303,7 @@ export function SnapshotView(props: {
         >
           <img src={snapshot.image.dataUrl} alt={`Snapshot of ${snapshot.title || snapshot.url}`} draggable={false} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} />
           {stats
-            .slice()
+            .filter((s) => !hidden.has(s.area.key))
             .sort((a, b) => b.area.box.w * b.area.box.h - a.area.box.w * a.area.box.h)
             .map((s) => {
               const r = valueOf(s) / maxValue;
@@ -384,8 +404,16 @@ export function SnapshotView(props: {
               </section>
             )}
             <div style={{ fontSize: 13, color: c.muted }}>
-              {ranked.length} areas · ranked by {AREA_METRICS.find((m) => m.value === activeMetric)?.label.toLowerCase()}. Rename an area to
-              call it what your team calls it.
+              {ranked.length} areas · ranked by {AREA_METRICS.find((m) => m.value === activeMetric)?.label.toLowerCase()}. Tick the areas to
+              show on the picture; click a name to select it, click again to deselect; rename an area to call it what your team calls it.
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" onClick={() => setHidden(new Set())} disabled={hidden.size === 0} style={smallButton}>
+                Show all
+              </button>
+              <button type="button" onClick={() => setHidden(new Set(stats.map((s) => s.area.key)))} disabled={hidden.size >= stats.length} style={smallButton}>
+                Hide all
+              </button>
             </div>
             {ranked.map((s) => (
               <AreaRow
@@ -395,6 +423,8 @@ export function SnapshotView(props: {
                 name={nameOf(s)}
                 suggested={snapshot.names[s.area.key] ? clean(s.area.name) : null}
                 selected={pinned?.kind === "area" && pinned.id === s.area.id}
+                visible={!hidden.has(s.area.key)}
+                onToggle={() => toggleArea(s.area.key)}
                 onSelect={() => focusArea(s.area.id)}
                 onRename={(name) => props.onRename(s.area.key, name)}
               />
@@ -526,12 +556,26 @@ function ElementCard(props: { m: MatchedElement | null; name: string; area: stri
   );
 }
 
+const smallButton: CSSProperties = {
+  minHeight: 32,
+  padding: "0 10px",
+  borderRadius: 8,
+  border: `1px solid ${c.line}`,
+  background: c.surface,
+  color: c.ink,
+  cursor: "pointer",
+  fontSize: 13,
+  fontWeight: 600,
+};
+
 function AreaRow(props: {
   value: string;
   ratio: number;
   name: string;
   suggested: string | null;
   selected: boolean;
+  visible: boolean;
+  onToggle: () => void;
   onSelect: () => void;
   onRename: (name: string) => void;
 }) {
@@ -567,8 +611,17 @@ function AreaRow(props: {
         borderRadius: 10,
         border: props.selected ? `2px solid ${c.accent}` : `1px solid ${c.line}`,
         background: props.selected ? c.accentSoft : c.surface,
+        opacity: props.visible ? 1 : 0.6,
       }}
     >
+      <input
+        type="checkbox"
+        checked={props.visible}
+        onChange={props.onToggle}
+        aria-label={`Show ${props.name} on the picture`}
+        title={props.visible ? "Shown on the picture: untick to hide" : "Hidden: tick to show on the picture"}
+        style={{ width: 18, height: 18, margin: 0, flex: "none", accentColor: "#2F4BD8", cursor: "pointer" }}
+      />
       <span style={{ minWidth: 58, textAlign: "center", padding: "3px 8px", borderRadius: 999, fontWeight: 800, fontSize: 13, background: h.bg, color: h.fg }}>
         {props.value}
       </span>

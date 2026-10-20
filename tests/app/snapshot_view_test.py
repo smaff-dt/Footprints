@@ -75,6 +75,18 @@ with sync_playwright() as p:
     pg.click("text=Clear selection")
     print("selection cleared:", pg.locator("[aria-label=Selected]").count() == 0)
 
+    # Hide an area, show it again; select an area from the sidebar and deselect it
+    n = lambda: pg.locator("[data-area]").count()
+    before = n()
+    pg.click("aside input[type=checkbox] >> nth=0")
+    after = n()
+    pg.click("text=Show all")
+    print("areas on the picture: shown", before, "· one hidden", after, "· show all", n())
+    pg.click("aside button:has-text('Hot products') >> nth=0")
+    sel = pg.locator("[aria-label=Selected]").count()
+    pg.click("aside button:has-text('Hot products') >> nth=-1")
+    print("area selected then deselected from the sidebar:", sel == 1, pg.locator("[aria-label=Selected]").count() == 0)
+
     # Rename the first area
     pg.click("aside [aria-label^=Rename] >> nth=0")
     pg.keyboard.press("Control+A")
