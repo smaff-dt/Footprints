@@ -373,16 +373,18 @@ export function clickPositionsQuery(f: Filters, scope: PageScope, minWidth: numb
  */
 function conversionBase(f: Filters, scope: PageScope, goal: PageScope): string {
   return lines(
+    // user.events carry their time in start_time; timestamp is the generic fallback.
     `fetch user.events, ${fromClause(f.timeframe)}`,
     appFilter(f.appId),
     deviceFilter(f.device),
     PAGE_FIELDS,
     `| fieldsAdd fp_in = ${scopeExpr(scope)}, fp_goal = ${scopeExpr(goal)}`,
     "| filter fp_in == true or fp_goal == true",
+    "| fieldsAdd fp_at = coalesce(start_time, timestamp)",
     "| fieldsAdd fp_click = if(fp_in == true and characteristics.has_user_interaction == true and interaction.type == \"click\" " +
       "and not(contains(toString(ui_element.xpath), \"footprints-overlay-host\")), toString(ui_element.xpath))",
-    "| summarize goal_at = max(if(fp_goal == true, timestamp)), landed_at = min(if(fp_in == true, timestamp)), " +
-      "clicked = arrayRemoveNulls(collectArray(if(isNotNull(fp_click), record(section = fp_click, at = timestamp)))), " +
+    "| summarize goal_at = max(if(fp_goal == true, fp_at)), landed_at = min(if(fp_in == true, fp_at)), " +
+      "clicked = arrayRemoveNulls(collectArray(if(isNotNull(fp_click), record(section = fp_click, at = fp_at)))), " +
       "by: {session = dt.rum.session.id}",
     "| filter isNotNull(landed_at)",
   );
