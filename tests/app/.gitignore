@@ -2,3 +2,5 @@ harness.js
 harness.html
 *.png
 __pycache__/
+app_harness.js
+app_harness.html

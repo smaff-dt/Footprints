@@ -7,7 +7,7 @@
  */
 import { CSSProperties, useState } from "react";
 import { Filters, PageScope } from "../dql/queries";
-import { loadClickWidths, loadPageElements, loadScrollDepth } from "../hooks/data";
+import { loadClickWidths, loadPageElements, loadPageVisits, loadScrollDepth } from "../hooks/data";
 import { formatInt } from "../lib/format";
 import { copyPayload, PagePayload, planWidths, showOnPage, takeAutoSnapshot, useExtensionVersion, versionAtLeast } from "../lib/extension";
 import { c } from "../theme";
@@ -30,9 +30,6 @@ export function ShowOnPage(props: {
   scope: PageScope;
   sampleUrl: string;
   appName: string;
-  periodLabel: string;
-  deviceLabel: string;
-  pageVisits: number;
 }) {
   const version = useExtensionVersion();
   const installed = version !== null;
@@ -41,8 +38,9 @@ export function ShowOnPage(props: {
 
   async function build(filters: Filters = props.filters): Promise<PagePayload> {
     // Scroll depth is a plus: if it fails, the page still shows the clicks.
-    const [elements, scroll] = await Promise.all([
+    const [elements, visits, scroll] = await Promise.all([
       loadPageElements(filters, props.scope),
+      loadPageVisits(filters, props.scope),
       loadScrollDepth(filters, props.scope).then(
         (s) => ({ ok: true as const, s }),
         (err: unknown) => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }),
@@ -55,10 +53,10 @@ export function ShowOnPage(props: {
       appId: props.filters.appId,
       page: props.page,
       url: props.sampleUrl,
-      period: props.periodLabel,
-      device: props.deviceLabel,
+      period: filters.timeframe === "24h" ? "Last 24 hours" : filters.timeframe === "30d" ? "Last 30 days" : "Last 7 days",
+      device: filters.device === "all" ? "All devices" : filters.device.charAt(0).toUpperCase() + filters.device.slice(1),
       deviceKey: filters.device,
-      pageVisits: props.pageVisits,
+      pageVisits: visits,
       elements,
       scroll: scroll.ok && scroll.s.visits > 0 ? scroll.s : null,
       scrollError: scroll.ok ? null : scroll.error,
@@ -139,8 +137,8 @@ export function ShowOnPage(props: {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8, maxWidth: 620 }}>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-end" }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-start" }}>
         <button type="button" onClick={() => onAuto("desktop")} disabled={busy} style={primary} title="Taken in the background at the window width most visitors use">
           <Icon d="M3 5h18v11H3z M8 20h8 M12 16v4" />
           Desktop snapshot
@@ -156,17 +154,15 @@ export function ShowOnPage(props: {
       </div>
 
       {status.kind === "auto" && (
-        <p role="status" style={{ margin: 0, fontSize: 14, color: c.muted, textAlign: "right" }}>
+        <p role="status" style={{ margin: 0, fontSize: 14, color: c.muted }}>
           {status.device === "desktop" ? "Desktop" : "Mobile"} snapshot: {status.text}
-          <br />
-          Chrome may show a bar saying Footprints is debugging the browser while it works.
         </p>
       )}
       {status.kind === "auto-done" && (
         <p role="status" style={{ margin: 0, fontSize: 14, color: c.muted }}>
           {status.pending
             ? "The snapshot was taken and will be added the next time you open Footprints."
-            : `${status.device === "desktop" ? "Desktop" : "Mobile"} snapshot saved: it is open below, under Page map.`}
+            : `${status.device === "desktop" ? "Desktop" : "Mobile"} snapshot saved.`}
         </p>
       )}
 

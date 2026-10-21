@@ -222,12 +222,6 @@ export function SnapshotView(props: {
     [heat?.rows, map, snapshot],
   );
   const placedTotal = placed ? placed.exact + placed.approx : 0;
-  const heatNote =
-    mode === "clicks" && placed && placedTotal > 0 && placed.approx / placedTotal > 0.5
-      ? snapshot.capture === "auto"
-        ? "Most clicks come from window widths this snapshot was not measured at: their spot within each element is estimated. A new desktop or mobile snapshot measures the widths visitors use now."
-        : "This snapshot was taken by hand, at one window width: for clicks from other widths, the spot within each element is estimated. A desktop or mobile snapshot measures the page at the widths visitors use."
-      : null;
 
   const hl = (t: Target | null): Box | null =>
     !t ? null : t.kind === "element" ? map.elements[t.index]?.box ?? null : statById.get(t.id)?.area.box ?? null;
@@ -403,11 +397,6 @@ export function SnapshotView(props: {
                     placedTotal,
                   )} estimated within their element${placed.unplaced ? ` · ${formatInt(placed.unplaced)} clicks are on elements not on this snapshot` : ""}.`
                 : ""}
-        </div>
-      )}
-      {heatNote && (
-        <div role="note" style={{ padding: "10px 12px", borderRadius: 10, background: c.warnSoft, color: c.warnInk, fontSize: 14 }}>
-          {heatNote}
         </div>
       )}
       {notes.map((n) => (

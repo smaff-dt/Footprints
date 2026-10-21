@@ -19,6 +19,18 @@ It reads the user interactions captured by Dynatrace Real User Monitoring
 
 ## How it works
 
+Footprints has two screens:
+
+1. **Snapshots** — choose an application and a page (or a page group), take
+   a new snapshot, and find the snapshots you saved (search by page or
+   application). The list of pages is loaded only when you open the page
+   picker.
+2. **Analysis** — opens when a snapshot is saved or picked from the list:
+   the snapshot with its numbers for the period you choose, an optional
+   conversion goal, and the Areas, Click heatmap and Scroll heatmap views (or
+   the List view, without a picture). The numbers come from visits on the
+   snapshot's kind of device.
+
 ### Taking a snapshot
 
 | Option | How |
@@ -216,8 +228,9 @@ extension/
   panel.html/js           the panel on the live page, isolated from the website
   popup.html/js           "Show copied data on this tab" fallback
 ui/
-  App.tsx                 page layout, filters, view switch, receives snapshots
-  components/SnapshotPanel  snapshots of a page: list, load, rename, delete
+  App.tsx                 the two screens, page groups, receives snapshots from the extension
+  screens/SnapshotsScreen  new snapshot (application, page, capture options) and the list of saved snapshots
+  screens/AnalysisScreen   one snapshot: period, goal, page map or list, rename, delete
   components/SnapshotView   the page map: metric dropdown, colored areas, any element selectable, sidebar
   components/PagePicker   searchable page list and the page group editor (also used for the goal)
   components/Heatmaps     click and scroll heatmap layers
@@ -264,6 +277,10 @@ python3 tests/overlay/auto_test.py       # automatic desktop and mobile snapshot
 # app page map, rendered outside Dynatrace with the snapshot from e2e.py:
 node_modules/.bin/esbuild tests/app/harness.tsx --bundle --outfile=tests/app/harness.js --format=iife --jsx=automatic
 python3 tests/app/snapshot_view_test.py
+# the whole app with a simulated Dynatrace (SDKs replaced by tests/app/mock):
+node_modules/.bin/esbuild tests/app/app_harness.tsx --bundle --outfile=tests/app/app_harness.js --format=iife --jsx=automatic \
+  --alias:@dynatrace-sdk/client-query=./tests/app/mock/query.ts --alias:@dynatrace-sdk/client-document=./tests/app/mock/document.ts
+python3 tests/app/app_test.py
 # clicks from other window widths placed on the right element (uses auto_test.py's output):
 node_modules/.bin/esbuild tests/app/place_test.ts --bundle --platform=node --format=esm --outfile=/tmp/place.mjs && node /tmp/place.mjs
 ```

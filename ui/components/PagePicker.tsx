@@ -22,6 +22,8 @@ export function PagePicker(props: {
   onChange: (choice: PageChoice) => void;
   onNewGroup: () => void;
   onEditGroup: (group: PageGroup) => void;
+  /** Called when the list opens: pages are loaded only when needed. */
+  onOpen?: () => void;
   label?: string;
   /** Offers an empty choice with this text (e.g. "No goal"). */
   noneLabel?: string;
@@ -91,8 +93,10 @@ export function PagePicker(props: {
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        disabled={props.loading && props.choices.length === 0}
+        onClick={() => {
+          if (!open) props.onOpen?.();
+          setOpen((o) => !o);
+        }}
         style={{
           minHeight: 44,
           padding: "0 12px",
@@ -109,7 +113,7 @@ export function PagePicker(props: {
         }}
       >
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {props.current ? describe(props.current) : props.loading ? "Loading pages…" : props.placeholder ?? "Choose a page"}
+          {props.current ? describe(props.current) : props.placeholder ?? "Choose a page"}
         </span>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
           <path d="m6 9 6 6 6-6" />
@@ -161,8 +165,10 @@ export function PagePicker(props: {
             </button>
           </div>
           <div style={{ fontSize: 12, color: c.muted, padding: "0 2px" }}>
-            {props.complete
-              ? `${formatInt(pageCount)} pages with clicks in this period`
+            {props.loading
+              ? ""
+              : props.complete
+              ? `${formatInt(pageCount)} pages with clicks in the last 7 days`
               : `The ${formatInt(PAGE_LIMIT)} most visited pages are listed; typing searches all of them.`}
             {remote && remote.text === q && !remote.pages && !remote.error && " Searching…"}
             {remote?.error && " The search failed: showing listed pages only."}
@@ -190,7 +196,8 @@ export function PagePicker(props: {
             {pages.map((ch) => (
               <Row key={ch.key} choice={ch} selected={ch.key === props.value} onPick={pick} />
             ))}
-            {filtered.length === 0 && !(remote && !remote.pages && !remote.error) && (
+            {props.loading && <div style={{ padding: "8px 10px", fontSize: 14, color: c.muted }}>Loading the pages of this application…</div>}
+            {!props.loading && filtered.length === 0 && !(remote && !remote.pages && !remote.error) && (
               <div style={{ padding: "8px 10px", fontSize: 14, color: c.muted }}>No page matches “{query}”.</div>
             )}
           </div>

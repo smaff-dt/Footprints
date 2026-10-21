@@ -85,6 +85,9 @@ export interface SnapshotMeta {
   appId: string;
   pageHash: string;
   device: string;
+  /** The page or page group, as shown to the user. */
+  label: string;
+  capture: "auto" | "custom";
 }
 
 /** Short, stable hash of a page template (FNV-1a, hex). */
@@ -97,25 +100,52 @@ export function pageHash(page: string): string {
   return (h >>> 0).toString(16).padStart(8, "0");
 }
 
+/** Kept in the document's description, so the list of snapshots needs no download. */
 interface Description {
-  v: 1;
+  v: 1 | 2;
   a: string;
   p: string;
   d: string;
+  /** v2: page label and capture kind. */
+  l?: string;
+  c?: "auto" | "custom";
 }
 
-function describe(s: Snapshot): string {
-  const d: Description = { v: 1, a: s.appId.slice(0, 120), p: pageHash(s.page), d: s.device };
-  return JSON.stringify(d).slice(0, 256);
+function describe(s: Snapshot, label: string): string {
+  const base: Description = { v: 2, a: s.appId.slice(0, 80), p: pageHash(s.page), d: s.device, c: s.capture === "auto" ? "auto" : "custom", l: "" };
+  const room = 250 - JSON.stringify(base).length;
+  return JSON.stringify({ ...base, l: label.slice(0, Math.max(0, room)) });
 }
 
 function parseDescription(text: string | undefined): Description | null {
   try {
     const d = JSON.parse(text ?? "") as Description;
-    return d && d.v === 1 ? d : null;
+    return d && (d.v === 1 || d.v === 2) ? d : null;
   } catch {
     return null;
   }
+}
+
+/** "Footprints · Home page · 2026-10-20 15:09" → "Home page" (snapshots saved before labels were kept). */
+function labelFromName(name: string): string {
+  const parts = name.split(" · ");
+  return parts.length >= 3 ? parts.slice(1, -1).join(" · ") : name;
+}
+
+function metaOf(d: { id: string; version: string; name: string; description?: string; modificationInfo: { createdTime: Date | string } }): SnapshotMeta | null {
+  const meta = parseDescription(d.description);
+  if (!meta) return null;
+  return {
+    id: d.id,
+    version: d.version,
+    name: d.name,
+    createdTime: new Date(d.modificationInfo.createdTime).toISOString(),
+    appId: meta.a,
+    pageHash: meta.p,
+    device: meta.d,
+    label: meta.l || labelFromName(d.name),
+    capture: meta.c ?? "custom",
+  };
 }
 
 export function isSnapshot(value: unknown): value is Snapshot {
@@ -145,16 +175,15 @@ export async function saveSnapshot(s: Snapshot, label: string): Promise<string> 
     body: {
       name: `Footprints · ${label} · ${date}`.slice(0, 128),
       type: SNAPSHOT_TYPE,
-      description: describe(s),
+      description: describe(s, label),
       content: contentOf(s),
     },
   });
   return doc.id;
 }
 
-/** Snapshots of one page of one application, newest first. */
-export async function listSnapshots(appId: string, page: string): Promise<SnapshotMeta[]> {
-  const hash = pageHash(page);
+/** Every snapshot of the user, newest first. */
+export async function listAllSnapshots(): Promise<SnapshotMeta[]> {
   const out: SnapshotMeta[] = [];
   let pageKey: string | undefined;
   do {
@@ -166,21 +195,19 @@ export async function listSnapshots(appId: string, page: string): Promise<Snapsh
       pageKey,
     });
     for (const d of res.documents) {
-      const meta = parseDescription(d.description);
-      if (!meta || meta.p !== hash || meta.a !== appId.slice(0, 120)) continue;
-      out.push({
-        id: d.id,
-        version: d.version,
-        name: d.name,
-        createdTime: new Date(d.modificationInfo.createdTime).toISOString(),
-        appId: meta.a,
-        pageHash: meta.p,
-        device: meta.d,
-      });
+      const meta = metaOf(d);
+      if (meta) out.push(meta);
     }
     pageKey = res.nextPageKey;
   } while (pageKey);
   return out;
+}
+
+export async function getSnapshotMeta(id: string): Promise<SnapshotMeta> {
+  const d = await documentsClient.getDocumentMetadata({ id });
+  const meta = metaOf(d);
+  if (!meta) throw new Error("This document is not a Footprints snapshot.");
+  return meta;
 }
 
 export async function loadSnapshot(id: string): Promise<Snapshot> {

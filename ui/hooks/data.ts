@@ -308,3 +308,8 @@ export function useElementConversions(
 ): QueryState<ElementConversion[]> {
   return useQuery(filters && scope && goal ? elementConversionQuery(filters, scope, goal) : null, mapElementConversions, refreshKey);
 }
+
+/** Visits to a page or group (for the live page drawn by the extension). */
+export async function loadPageVisits(filters: Filters, scope: PageScope): Promise<number> {
+  return mapVisits(await runQuery(pageVisitsQuery(filters, scope)));
+}
