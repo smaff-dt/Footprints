@@ -21,7 +21,7 @@ body{margin:0;font-family:Arial,sans-serif}
     <div class="hero"><div><h1>Telescopes for everyone</h1><button type="button">Shop now</button></div><span id="marker" style="display:block;margin-left:40px;width:120px;height:40px;background:#ff0000;color:#ff0000">Marker</span></div>
     <div><h2 style="padding:0 40px">Hot products</h2>
       <div class="grid">
-        <div class="prod">Product 1<br><button type="button">Add</button></div>
+        <div class="prod">Product 1<br><img id="pic1" src="green.png?eager" decoding="async" alt="" style="display:block;width:60px;height:40px;float:right"><button type="button">Add</button></div>
         <div class="prod">Product 2<br><button type="button">Add</button></div>
         <div class="prod">Product 3<br><button type="button">Add</button></div>
         <div class="prod">Product 4<br><button type="button">Add</button></div>
@@ -29,8 +29,8 @@ body{margin:0;font-family:Arial,sans-serif}
         <div class="prod">Product 6<br><button type="button">Add</button></div>
         <div class="prod">Product 7<br><button type="button">Add</button></div>
         <div class="prod">Product 8<br><button type="button">Add</button></div>
-        <div class="prod">Product 9<br><button type="button">Add</button></div>
-        <div class="prod">Product 10<br><button type="button">Add</button></div>
+        <div class="prod">Product 9<br><button type="button">Add</button><img class="io-lazy" data-src="green.png?io" alt="Product 9" style="display:block;width:120px;height:80px;margin-top:8px;opacity:0;transition:opacity .6s"></div>
+        <div class="prod">Product 10<br><button type="button">Add</button><img id="pic" src="green.png?lazy" loading="lazy" decoding="async" alt="Product 10" style="display:block;width:120px;height:80px;margin-top:8px"></div>
       </div>
     </div>
   </main>
@@ -38,4 +38,12 @@ body{margin:0;font-family:Arial,sans-serif}
 </div>
 <div class="cookie">We use cookies <button type="button">OK</button></div>
 <script>document.body.dataset.ua = navigator.userAgent.includes("iPhone") ? "phone" : "computer"</script>
+<script>
+// Pictures loaded by a script when they come into view, then faded in (common on shops).
+const io = new IntersectionObserver((entries) => entries.forEach((e) => {
+  if (!e.isIntersecting) return;
+  const img = e.target; img.src = img.dataset.src; img.onload = () => (img.style.opacity = 1); io.unobserve(img);
+}));
+document.querySelectorAll(".io-lazy").forEach((i) => io.observe(i));
+</script>
 </body></html>

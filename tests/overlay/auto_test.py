@@ -29,6 +29,9 @@ with sync_playwright() as p:
         tempfile.mkdtemp(), headless=not headed, channel="chromium",
         args=[f"--disable-extensions-except={EXT}", f"--load-extension={EXT}"] + (["--window-size=1100,700"] if headed else []),
         viewport=None if headed else {"width": 1500, "height": 900},
+        # Playwright normally keeps background tabs running at full speed; real
+        # Chrome does not, so let it treat the snapshot tab as a hidden one.
+        ignore_default_args=["--disable-background-timer-throttling", "--disable-backgrounding-occluded-windows", "--disable-renderer-backgrounding"],
     )
     if not ctx.service_workers:
         ctx.wait_for_event("serviceworker", timeout=10000)
@@ -86,6 +89,12 @@ with sync_playwright() as p:
             print("  right-hand marker aligned (blue at the centre of its box):", px[2] > 200 and px[0] < 60 and px[1] < 60, px)
         top = im.crop((0, int(600 * sc), im.width, im.height)).convert("L")
         print("  sticky header not repeated further down:", sum(1 for px in top.get_flattened_data() if px < 30) < top.width * 20)
+        for name in ("Product 10", "Product 9"):
+            pe = next((e for e in snap["map"]["elements"] if e["name"].startswith(name) and e["box"]["w"] == 120), None)
+            if pe:
+                pb = pe["box"]
+                px2 = im.getpixel((int((pb["x"] + pb["w"] / 2) * sc), int((pb["y"] + pb["h"] / 2) * sc)))
+                print(f"  picture of {name} loaded (green):", px2[1] > 120 and px2[0] < 80, px2)
         print("  background tab closed:", len(ctx.pages) == tabs_before, "| progress:", app.evaluate("window.progress.slice(-3)"))
     ctx.close()
 srv.shutdown()

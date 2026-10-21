@@ -229,13 +229,34 @@ async function autoSnapshot(payload, sender) {
     progress(opener, "Reading the page…");
     await chrome.scripting.executeScript({ target, files: ["overlay.js"] });
     await inTab(tab.id, "prepare", payload);
-    // Lazy content: make every part of the page "on screen" for a moment, then scroll through it.
+    // Pictures. A hidden tab barely draws: pictures that load when they come
+    // into view, fade in, or are large wait for a drawing that never comes.
+    // So: ask for every picture now; make the whole page "on screen" for a
+    // moment and force a few drawings; go through it screen by screen, forcing
+    // a drawing at each; then wait until every picture is loaded and ready.
+    progress(opener, "Loading the pictures…");
+    const draw = () => send("Page.captureScreenshot", { format: "jpeg", quality: 10, clip: { x: 0, y: 0, width: 10, height: 10, scale: 0.1 } }).catch(() => null);
+    await inTab(tab.id, "forceImages");
     let size = await inTab(tab.id, "size");
     await metrics(width, Math.max(height, Math.min(size.h, 16000)));
-    await sleep(1500);
+    for (let k = 0; k < 3; k++) {
+      await draw();
+      await sleep(600);
+    }
     await metrics(width, height);
-    await sleep(500);
-    size = await inTab(tab.id, "preload");
+    await sleep(300);
+    size = await inTab(tab.id, "size");
+    for (let y = 0; y < size.h; y += Math.round(height * 0.8)) {
+      await inTab(tab.id, "scrollTo", y);
+      await draw();
+      await sleep(250);
+      await draw();
+    }
+    await inTab(tab.id, "scrollTo", 0);
+    await inTab(tab.id, "forceImages");
+    await inTab(tab.id, "imagesReady", false);
+    await draw();
+    size = await inTab(tab.id, "size");
     await inTab(tab.id, "prepare", payload);
 
     progress(opener, "Taking the picture…");
@@ -251,7 +272,10 @@ async function autoSnapshot(payload, sender) {
     const shots = [];
     for (let y = 0, i = 0; i < 60; i++) {
       const at = await inTab(tab.id, "scrollTo", y);
-      await sleep(250);
+      await draw();
+      await inTab(tab.id, "imagesReady", true);
+      await draw();
+      await sleep(200);
       progress(opener, `Taking the picture… ${Math.min(100, Math.round(((at.y + at.viewH) / size.h) * 100))}%`);
       const shot = await send("Page.captureScreenshot", { format: "jpeg", quality: 85 });
       shots.push({ y: at.y, viewW: at.viewW, data: shot.data });

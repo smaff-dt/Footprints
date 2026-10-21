@@ -42,7 +42,9 @@ Footprints has two screens:
 While an automatic snapshot is taken (a few seconds), Chrome shows a bar
 saying Footprints is debugging the browser: the extension uses Chrome's
 debugging interface to load the page at a given width without touching your
-window. The background tab closes by itself. It is shown at 100% zoom even
+window. Before the picture, every picture of the page is asked for and the
+extension waits until they are loaded and ready to draw (a hidden tab
+otherwise leaves pictures blank). The background tab closes by itself. It is shown at 100% zoom even
 if you zoomed the site in Chrome (your own zoom is left as it is).
 
 **Open the page** opens the live page with a small Footprints panel: get the
@@ -83,7 +85,7 @@ Dynatrace and follow you across browsers.
 
 | View | What it shows |
 |---|---|
-| **Zones** | The page opens with no zone. Point at it: the block under the pointer is outlined — any block of the page, clicked or not. Click it to turn it into a zone: it stays on and shows the metric chosen in **Show**; a click anywhere in a zone that is on turns it off. Zones never overlap: turning on a zone inside, around or across another turns the other one off. The zone's card lists the blocks around it, from the smallest to the largest (wrappers exactly as big as the block they hold are skipped), to pick the right one; pointing at a level outlines it first. **Suggest zones** replaces the zones that are on with the 2–3 zones that get the most clicks. **Zone list** ranks the zones that are on, to rename or turn off |
+| **Zones** | The page opens with no zone. Point at it: the block under the pointer is outlined — any block of the page, clicked or not. Click it to turn it into a zone: it stays on and shows the metric chosen in **Show**, colored from blue (lowest among the zones on) to red (highest); a click anywhere in a zone that is on turns it off. Pointing at a zone shows an **i**, which opens its details. Zones never overlap: turning on a zone inside, around or across another turns the other one off. The details card lists the blocks around it, from the smallest to the largest (wrappers exactly as big as the block they hold are skipped), to pick the right one; pointing at a level outlines it first. **Suggest zones** replaces the zones that are on with the 2–3 zones that get the most clicks. **Zone list** ranks the zones that are on, to rename or turn off |
 | **Click heatmap** | Where visitors click, from the click positions recorded by Dynatrace. A position belongs to the layout the visitor saw, which depends on the window width; each click is moved onto the same element of the snapshot, at the same spot within it (30% from its left, 60% from its top…) when the page was measured at that width, or estimated from how the element's clicks are spread otherwise. Footprints says how many clicks were placed exactly |
 | **Scroll heatmap** | The page colored by the share of visits that get down to each height (red: everyone, blue: few); point anywhere to read the share |
 | **Table** | The clicked elements, sortable by clicks, click share, visits, click rate, exposure or conversion; **Show** turns one into a zone on the picture |

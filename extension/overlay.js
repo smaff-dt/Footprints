@@ -1290,6 +1290,7 @@
   // the clicked elements are at other widths.
 
   const floating = [];
+  let bgPictures = [];
   const auto = {
     prepare(payload) {
       state.auto = true; // nothing is drawn on the page
@@ -1314,6 +1315,72 @@
       const doc = document.documentElement;
       const full = Math.max(doc.scrollHeight, document.body.scrollHeight);
       return { w: doc.clientWidth, h: Math.min(full, MAX_PAGE_HEIGHT), truncated: full > MAX_PAGE_HEIGHT, viewW: window.innerWidth, viewH: window.innerHeight, title: document.title, url: location.href };
+    },
+    /**
+     * Makes every picture load now: lazy pictures become eager, pictures a
+     * script would load later (data-src…) get their address, and background
+     * pictures from the page's styles are fetched.
+     */
+    forceImages() {
+      let n = 0;
+      for (const img of document.querySelectorAll("img, iframe")) {
+        if (img.loading === "lazy") {
+          img.loading = "eager";
+          n++;
+        }
+        if (img.localName === "img") {
+          img.decoding = "sync";
+          const ds = img.dataset;
+          const src = ds.src || ds.lazySrc || ds.original || ds.lazy;
+          if (src && !img.getAttribute("src")?.includes(src)) {
+            img.src = src;
+            n++;
+          }
+          const set = ds.srcset || ds.lazySrcset;
+          if (set && !img.srcset) img.srcset = set;
+        }
+      }
+      for (const source of document.querySelectorAll("source[data-srcset]")) {
+        source.srcset = source.dataset.srcset;
+        n++;
+      }
+      // Background pictures: fetch them so they are ready when painted.
+      const urls = new Set();
+      for (const el of document.body.querySelectorAll("*")) {
+        const bg = getComputedStyle(el).backgroundImage;
+        if (bg && bg !== "none") for (const m of bg.matchAll(/url\(["']?([^"')]+)["']?\)/g)) urls.add(m[1]);
+        if (urls.size > 200) break;
+      }
+      bgPictures = Array.from(urls).map((u) => {
+        const i = new Image();
+        i.src = u;
+        return i;
+      });
+      return n + urls.size;
+    },
+    /**
+     * Waits until the pictures (all, or only those on screen) are loaded and
+     * ready to be drawn — hidden tabs otherwise leave large pictures blank.
+     */
+    async imagesReady(onScreenOnly) {
+      const all = [...document.images, ...bgPictures];
+      const imgs = onScreenOnly
+        ? Array.from(document.images).filter((img) => {
+            const r = img.getBoundingClientRect();
+            return r.bottom > -50 && r.top < window.innerHeight + 50 && r.width > 0;
+          })
+        : all;
+      const loaded = (img) =>
+        img.complete
+          ? Promise.resolve()
+          : new Promise((res) => {
+              img.addEventListener("load", res, { once: true });
+              img.addEventListener("error", res, { once: true });
+            });
+      const timeout = (ms) => new Promise((res) => setTimeout(res, ms));
+      await Promise.race([Promise.all(imgs.map(loaded)), timeout(onScreenOnly ? 3000 : 8000)]);
+      await Promise.race([Promise.all(imgs.map((img) => (img.decode ? img.decode().catch(() => {}) : null))), timeout(onScreenOnly ? 2000 : 4000)]);
+      return { pictures: imgs.length, waiting: imgs.filter((i) => !i.complete).length };
     },
     /** Hides bars stuck to the bottom or the sides (cookie banners, chat buttons): they would cover the page. */
     hideFloating() {

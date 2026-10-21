@@ -36,7 +36,7 @@ export function ShowOnPage(props: {
   const version = useExtensionVersion();
   const installed = version !== null;
   /** Snapshots need this version of the extension (it records every block of the page and fixes zoom). */
-  const NEEDED = "0.5.0";
+  const NEEDED = "0.5.1";
   const upToDate = versionAtLeast(version, NEEDED);
   const updateMessage = `The Footprints extension needs an update (version ${NEEDED} or later; this browser has ${version}): open chrome://extensions, click ↻ on Footprints, then reload this page.`;
   const [status, setStatus] = useState<Status>({ kind: "idle" });

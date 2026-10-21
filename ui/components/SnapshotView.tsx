@@ -45,7 +45,7 @@ import { Select } from "@dynatrace/strato-components/forms";
 import { Colors } from "@dynatrace/strato-design-tokens";
 import { AiIcon, ListIcon } from "@dynatrace/strato-icons";
 import { Checkbox, Segmented } from "./Controls";
-import { ClickHeatLayer, HeatLegend, ScrollHeatLayer } from "./Heatmaps";
+import { ClickHeatLayer, HeatLegend, heatRgb, ScrollHeatLayer } from "./Heatmaps";
 
 export type MapMode = "zones" | "clicks" | "scroll" | "table";
 
@@ -71,14 +71,14 @@ export interface ZoneCount {
 
 type Count = ZoneCount | "loading" | "error";
 
-const HEAT = ["#F6D9A8", "#EE9B4D", "#B8461A"];
+/** Zone colors on the same cold-to-hot scale as the heatmaps. */
+function zoneColor(ratio: number): { fill: string; line: string; bg: string; fg: string } {
+  const [r, g, b] = heatRgb(ratio);
+  const light = 0.299 * r + 0.587 * g + 0.114 * b > 150;
+  return { fill: `rgba(${r},${g},${b},0.38)`, line: `rgb(${r},${g},${b})`, bg: `rgb(${r},${g},${b})`, fg: light ? "#16191F" : "#FFFFFF" };
+}
 const BLUE = Colors.Border.Primary.Accent;
 
-function chipColors(ratio: number): { bg: string; fg: string } {
-  if (ratio >= 0.66) return { bg: HEAT[2], fg: "#FFFFFF" };
-  if (ratio >= 0.33) return { bg: HEAT[1], fg: "#16191F" };
-  return { bg: HEAT[0], fg: "#16191F" };
-}
 
 /** Names taken from a line of text come in quotes: drop them for display. */
 function clean(name: string): string {
@@ -196,7 +196,11 @@ export function SnapshotView(props: {
   }
   const zoneNums = new Map(zoneIdx.map((i) => [i, numbersOf(i)]));
   const valueOf = (i: number) => zoneValue(zoneNums.get(i) ?? numbersOf(i), activeMetric);
-  const maxValue = Math.max(1e-9, ...zoneIdx.map((i) => valueOf(i) ?? 0));
+  // Colors spread from the lowest to the highest value among the zones that are on.
+  const zoneValues = zoneIdx.map((i) => valueOf(i) ?? 0);
+  const maxValue = Math.max(...zoneValues, 0);
+  const minValue = Math.min(...zoneValues, maxValue);
+  const ratioOf = (i: number) => (maxValue - minValue > 1e-9 ? ((valueOf(i) ?? 0) - minValue) / (maxValue - minValue) : 0.5);
 
   // ── Changing the zoning ────────────────────────────────────────────────────
   function setZones(next: number[], names = props.names) {
@@ -210,10 +214,10 @@ export function SnapshotView(props: {
     const h = Math.min(p.y + p.h, q.y + q.h) - Math.max(p.y, q.y);
     return w > 2 && h > 2;
   }
-  function turnOn(i: number, also: number[] = []) {
+  function turnOn(i: number, also: number[] = [], openCard = false) {
     const gone = zoneIdx.filter((z) => z !== i && !also.includes(z) && overlaps(z, i));
     setZones([...zoneIdx.filter((z) => !gone.includes(z) && !also.includes(z)), i]);
-    setSelected(i);
+    setSelected(openCard ? i : null);
     setOverlapNote(gone.length ? `${gone.map(nameOf).join(", ")} turned off: zones cannot overlap.` : null);
   }
   function toggle(i: number) {
@@ -225,7 +229,7 @@ export function SnapshotView(props: {
   }
   function replaceZone(from: number, to: number) {
     if (from === to) return;
-    turnOn(to, [from]);
+    turnOn(to, [from], true);
     setPreview(null);
   }
   function rename(i: number, name: string) {
@@ -359,6 +363,7 @@ export function SnapshotView(props: {
                 </span>
               )}
             </div>
+            {zoneIdx.length > 1 && <HeatLegend low="Lowest" high="Highest" />}
             <Button variant="emphasized" onClick={suggest}>
               <Button.Prefix>
                 <AiIcon />
@@ -396,8 +401,13 @@ export function SnapshotView(props: {
         {props.saving && <Chip muted>Saving…</Chip>}
       </div>
 
-      {mode === "zones" && zoneIdx.length === 0 && !suggestNote && (
-        <div style={{ fontSize: 14, color: c.muted }}>Point at the page to see its blocks; click one to turn it into a zone, click it again to turn it off. Or let Footprints suggest the zones that get the most clicks.</div>
+      {/* Always one line here, so the picture does not move when the first zone is turned on. */}
+      {mode === "zones" && !suggestNote && (
+        <div style={{ fontSize: 14, color: c.muted }}>
+          {zoneIdx.length === 0
+            ? "Point at the page to see its blocks; click one to turn it into a zone. Or let Footprints suggest the zones that get the most clicks."
+            : "Click a block to turn it into a zone, click a zone to turn it off; the “i” on a zone opens its details."}
+        </div>
       )}
       {mode === "zones" && suggestNote && (
         <div role="status" style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", padding: "10px 12px", borderRadius: 10, background: c.accentSoft, fontSize: 14 }}>
@@ -494,9 +504,9 @@ export function SnapshotView(props: {
                 .sort((a, b) => map.elements[b].box.w * map.elements[b].box.h - map.elements[a].box.w * map.elements[a].box.h)
                 .map((i) => {
                   const v = valueOf(i);
-                  const r = (v ?? 0) / maxValue;
-                  const h = chipColors(r);
+                  const h = zoneColor(ratioOf(i));
                   const isSel = selected === i;
+                  const showInfo = isSel || hover?.i === i;
                   return (
                     <div
                       key={i}
@@ -506,8 +516,8 @@ export function SnapshotView(props: {
                         ...at(map.elements[i].box),
                         boxSizing: "border-box",
                         borderRadius: 4,
-                        border: isSel ? `3px solid ${BLUE}` : "2px solid rgba(184,70,26,0.9)",
-                        background: `rgba(232,116,46,${(0.12 + 0.38 * r).toFixed(2)})`,
+                        border: isSel ? `3px solid ${BLUE}` : `2px solid ${h.line}`,
+                        background: h.fill,
                         pointerEvents: "none",
                       }}
                     >
@@ -536,6 +546,37 @@ export function SnapshotView(props: {
                       >
                         {formatShare(v)}
                       </button>
+                      {showInfo && (
+                        <button
+                          type="button"
+                          aria-label={`Details of ${nameOf(i)}`}
+                          title="Details"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelected(isSel ? null : i);
+                          }}
+                          style={{
+                            position: "absolute",
+                            right: 3,
+                            top: 3,
+                            width: 22,
+                            height: 22,
+                            borderRadius: 999,
+                            border: 0,
+                            background: BLUE,
+                            color: "#FFFFFF",
+                            fontSize: 13,
+                            fontWeight: 600,
+                            fontStyle: "italic",
+                            fontFamily: "Georgia, serif",
+                            boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                            pointerEvents: "auto",
+                            cursor: "pointer",
+                          }}
+                        >
+                          i
+                        </button>
+                      )}
                     </div>
                   );
                 })}
@@ -550,7 +591,7 @@ export function SnapshotView(props: {
                 </div>
               ))}
 
-            {hoverI !== null && <Outline box={map.elements[hoverI].box} at={at} dashed />}
+            {hoverI !== null && !zoneSet.has(hoverI) && <Outline box={map.elements[hoverI].box} at={at} dashed />}
             {preview !== null && <Outline box={map.elements[preview].box} at={at} />}
 
             {mode === "zones" && selected !== null && zoneSet.has(selected) && (
@@ -600,7 +641,7 @@ export function SnapshotView(props: {
                       <ZoneRow
                         key={i}
                         value={formatShare(valueOf(i))}
-                        ratio={(valueOf(i) ?? 0) / maxValue}
+                        ratio={ratioOf(i)}
                         name={nameOf(i)}
                         suggested={props.names[pathOf(i)] ? clean(map.elements[i].name) : null}
                         selected={selected === i}
@@ -619,15 +660,6 @@ export function SnapshotView(props: {
         </div>
       )}
 
-      {hoverI !== null && hover && (
-        <HoverCard x={hover.x} y={hover.y} width={240}>
-          <div style={{ fontWeight: 600 }}>{nameOf(hoverI)}</div>
-          <div style={{ color: c.muted }}>
-            {metricInfo.label}: <strong style={{ color: c.ink }}>{formatShare(valueOf(hoverI))}</strong>
-            {zoneSet.has(hoverI) ? " · click to turn off" : " · click to turn into a zone"}
-          </div>
-        </HoverCard>
-      )}
       {pointerY && hasScroll && (
         <HoverCard x={pointerY.x} y={pointerY.y} width={240}>
           <span style={{ fontSize: 20, fontWeight: 600, color: "#B8461A" }}>{formatShare(reachAt(scroll, pointerY.pageY))}</span>{" "}
@@ -859,7 +891,7 @@ function ZoneRow(props: {
     }
   }
 
-  const h = chipColors(props.ratio);
+  const h = zoneColor(props.ratio);
   const iconButton: CSSProperties = { width: 34, height: 34, flex: "none", borderRadius: 8, border: `1px solid ${c.line}`, background: c.surface, color: c.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" };
   return (
     <div

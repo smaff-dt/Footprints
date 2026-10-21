@@ -59,9 +59,13 @@ with sync_playwright() as p:
 
     t = box_of(pg, "Add")
     pg.mouse.move(t["x"], t["y"]); pg.wait_for_timeout(100)
-    print("2. pointing outlines a block:", pg.inner_text("[role=tooltip]").replace("\n", " · "))
+    print("2. pointing outlines a block, no pop-up:", pg.locator("[aria-hidden=true][style*=dashed]").count() == 1, pg.locator("[role=tooltip]").count() == 0)
     pg.mouse.click(t["x"], t["y"]); pg.wait_for_timeout(200)
-    print("3. click turns it on:", pg.locator("[data-zone]").count(), "zone | label:", pg.locator("[data-zone] button").first.inner_text(), "| metric:", pg.inner_text("[id^=strato-select-trigger]"))
+    print("3. click turns it on:", pg.locator("[data-zone]").count(), "zone | label:", pg.locator("[data-zone] button").first.inner_text(), "| metric:", pg.inner_text("[id^=strato-select-trigger]"),
+          "| no card yet:", pg.locator("[aria-label='Selected zone']").count() == 0)
+    pg.mouse.move(t["x"] + 3, t["y"] + 2); pg.mouse.move(t["x"], t["y"]); pg.wait_for_timeout(150)
+    pg.click("[aria-label^='Details of']"); pg.wait_for_timeout(200)
+    print("   the “i” opens the card:", pg.locator("[aria-label='Selected zone']").count() == 1)
     card = pg.inner_text("[aria-label='Selected zone']").replace("\n", " · ")
     print("   card:", card[:260])
     print("   exact visits asked for:", window_counted := pg.evaluate("window.counted.length"))
@@ -79,6 +83,7 @@ with sync_playwright() as p:
     print("6. suggested:", pg.inner_text("[role=status]")[:200], "| zones on:", pg.locator("[data-zone]").count())
     # Picking a larger block that holds another zone turns that zone off: zones never overlap.
     pg.locator("[data-zone] button:has-text('%')").nth(1).click(); pg.wait_for_timeout(150)
+    print("   zone colors (cold to hot):", pg.eval_on_selector_all("[data-zone]", "els => els.map(e => e.style.borderColor || e.style.border)"))
     pg.locator("[aria-label='Selected zone'] button:has-text('Hot products (10 items)')").click(); pg.wait_for_timeout(200)
     print("   larger block over two zones:", pg.locator("[data-zone]").count(), "zones on |", pg.inner_text("[role=status] >> nth=-1"))
     # Suggest again: replaces what was on.
@@ -90,6 +95,7 @@ with sync_playwright() as p:
     pg.click("aside [aria-label^=Rename] >> nth=0")
     pg.keyboard.press("Control+A"); pg.keyboard.type("Product grid"); pg.keyboard.press("Enter"); pg.wait_for_timeout(100)
     print("7. renamed; saved zoning:", pg.evaluate("window.zoning[window.zoning.length - 1]"))
+    pick_metric(pg, "Click share")
     pg.screenshot(path=str(HERE / "zones.png"), full_page=True)
 
     view(pg, "Click heatmap")
