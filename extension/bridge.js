@@ -91,7 +91,7 @@
   try {
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (message && message.type === "footprints:auto-progress") {
-        reply({ type: "auto-progress", text: message.text });
+        reply({ type: "auto-progress", text: message.text, pct: message.pct });
         return false;
       }
       if (!message || message.type !== "footprints:deliver-snapshot") return false;

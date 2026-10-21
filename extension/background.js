@@ -151,14 +151,16 @@ const IPHONE_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-function progress(opener, text) {
+/** Tells the Footprints app how far the snapshot is: a short text and a percentage. */
+function progress(opener, text, pct) {
   if (!opener) return;
-  chrome.tabs.sendMessage(opener.tabId, { type: "footprints:auto-progress", text }, { frameId: opener.frameId }).catch(() => {});
+  chrome.tabs.sendMessage(opener.tabId, { type: "footprints:auto-progress", text, pct: Math.round(pct) }, { frameId: opener.frameId }).catch(() => {});
 }
 
-async function waitForLoad(tabId, timeoutMs) {
+async function waitForLoad(tabId, timeoutMs, onTick) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    if (onTick) onTick((Date.now() - start) / timeoutMs);
     const tab = await chrome.tabs.get(tabId);
     if (tab.status === "complete" && tab.url && !tab.url.startsWith("about:")) return;
     await sleep(300);
@@ -198,7 +200,7 @@ async function autoSnapshot(payload, sender) {
   const height = Math.round(cap.height || (mobile ? 844 : 900));
   const opener = sender.tab ? { tabId: sender.tab.id, frameId: sender.frameId || 0 } : null;
 
-  progress(opener, "Opening the page in the background…");
+  progress(opener, "Opening the page in the background…", 2);
   const tab = await chrome.tabs.create({ url: "about:blank", active: false, ...(sender.tab ? { windowId: sender.tab.windowId } : {}) });
   const target = { tabId: tab.id };
   let attached = false;
@@ -215,7 +217,9 @@ async function autoSnapshot(payload, sender) {
     }
     await metrics(width, height);
     await send("Page.navigate", { url: payload.url });
-    await waitForLoad(tab.id, 45000);
+    // While the page loads, the bar moves slowly so it never looks stuck.
+    await waitForLoad(tab.id, 45000, (t) => progress(opener, "Opening the page in the background…", 3 + 10 * Math.min(1, t * 4)));
+    progress(opener, "Waiting for the page to settle…", 14);
     // Chrome remembers a zoom level per site (Cmd/Ctrl + / -): show this tab at
     // 100% without changing the zoom the user chose for the site.
     try {
@@ -226,7 +230,7 @@ async function autoSnapshot(payload, sender) {
     }
     await sleep(2500); // content often keeps loading after "complete"
 
-    progress(opener, "Reading the page…");
+    progress(opener, "Reading the page…", 18);
     await chrome.scripting.executeScript({ target, files: ["overlay.js"] });
     await inTab(tab.id, "prepare", payload);
     // Pictures. A hidden tab barely draws: pictures that load when they come
@@ -234,7 +238,7 @@ async function autoSnapshot(payload, sender) {
     // So: ask for every picture now; make the whole page "on screen" for a
     // moment and force a few drawings; go through it screen by screen, forcing
     // a drawing at each; then wait until every picture is loaded and ready.
-    progress(opener, "Loading the pictures…");
+    progress(opener, "Loading the pictures…", 20);
     const draw = () => send("Page.captureScreenshot", { format: "jpeg", quality: 10, clip: { x: 0, y: 0, width: 10, height: 10, scale: 0.1 } }).catch(() => null);
     await inTab(tab.id, "forceImages");
     let size = await inTab(tab.id, "size");
@@ -247,6 +251,7 @@ async function autoSnapshot(payload, sender) {
     await sleep(300);
     size = await inTab(tab.id, "size");
     for (let y = 0; y < size.h; y += Math.round(height * 0.8)) {
+      progress(opener, "Loading the pictures…", 24 + 20 * (y / size.h));
       await inTab(tab.id, "scrollTo", y);
       await draw();
       await sleep(250);
@@ -254,12 +259,13 @@ async function autoSnapshot(payload, sender) {
     }
     await inTab(tab.id, "scrollTo", 0);
     await inTab(tab.id, "forceImages");
+    progress(opener, "Waiting for the pictures to be ready…", 45);
     await inTab(tab.id, "imagesReady", false);
     await draw();
     size = await inTab(tab.id, "size");
     await inTab(tab.id, "prepare", payload);
 
-    progress(opener, "Taking the picture…");
+    progress(opener, "Taking the picture…", 50);
     await inTab(tab.id, "hideFloating");
     const map = await inTab(tab.id, "map");
     size = await inTab(tab.id, "size");
@@ -276,7 +282,7 @@ async function autoSnapshot(payload, sender) {
       await inTab(tab.id, "imagesReady", true);
       await draw();
       await sleep(200);
-      progress(opener, `Taking the picture… ${Math.min(100, Math.round(((at.y + at.viewH) / size.h) * 100))}%`);
+      progress(opener, "Taking the picture…", 50 + 30 * Math.min(1, (at.y + at.viewH) / size.h));
       const shot = await send("Page.captureScreenshot", { format: "jpeg", quality: 85 });
       shots.push({ y: at.y, viewW: at.viewW, data: shot.data });
       if (i === 0) await inTab(tab.id, "hideTop");
@@ -285,13 +291,13 @@ async function autoSnapshot(payload, sender) {
     }
     await inTab(tab.id, "scrollTo", 0);
     await inTab(tab.id, "restoreFloating");
-    progress(opener, "Putting the pictures together…");
+    progress(opener, "Putting the pictures together…", 82);
     const imageData = await stitch(shots, size, dpr, scale);
     // Where the clicked elements are at the widths visitors use.
     const layouts = [await inTab(tab.id, "measure")];
     const others = (cap.widths || []).filter((w) => Math.abs(w - width) > Math.max(8, width * 0.01)).slice(0, 6);
     for (const [i, w] of others.entries()) {
-      progress(opener, `Measuring the page at ${w} px (${i + 1} of ${others.length})…`);
+      progress(opener, `Measuring the page at ${w} px (${i + 1} of ${others.length})…`, 85 + (10 * i) / others.length);
       await metrics(Math.round(w), height);
       await sleep(900);
       layouts.push(await inTab(tab.id, "measure"));
@@ -315,7 +321,7 @@ async function autoSnapshot(payload, sender) {
       capture: "auto",
       names: {},
     };
-    progress(opener, "Saving the snapshot…");
+    progress(opener, "Saving the snapshot…", 97);
     const delivered = await deliverTo(opener, snapshot);
     return { ...delivered, layouts: layouts.length };
   } finally {

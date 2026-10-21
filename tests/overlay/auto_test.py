@@ -40,7 +40,7 @@ with sync_playwright() as p:
     app.wait_for_function("document.getElementById('status').textContent === 'pong'", timeout=5000)
     app.evaluate("""() => { window.progress = []; window.done = [];
       window.addEventListener('message', e => { if (e.data && e.data.source === 'footprints-extension') {
-        if (e.data.type === 'auto-progress') window.progress.push(e.data.text);
+        if (e.data.type === 'auto-progress') window.progress.push(e.data.text + ' ' + e.data.pct + '%');
         if (e.data.type === 'auto-done') window.done.push(e.data); } }); }""")
 
     # A visitor of the site may have zoomed it (Chrome remembers zoom per site): 90% here.
@@ -95,6 +95,8 @@ with sync_playwright() as p:
                 pb = pe["box"]
                 px2 = im.getpixel((int((pb["x"] + pb["w"] / 2) * sc), int((pb["y"] + pb["h"] / 2) * sc)))
                 print(f"  picture of {name} loaded (green):", px2[1] > 120 and px2[0] < 80, px2)
-        print("  background tab closed:", len(ctx.pages) == tabs_before, "| progress:", app.evaluate("window.progress.slice(-3)"))
+        pcts = app.evaluate("window.progress.map(t => parseInt(t.split(' ').pop()))")
+        print("  background tab closed:", len(ctx.pages) == tabs_before, "| progress steps:", len(pcts), "| always moving forward:", all(b >= a for a, b in zip(pcts, pcts[1:])), "| first/last:", pcts[:1], pcts[-1:])
+        app.evaluate("window.progress = []")
     ctx.close()
 srv.shutdown()

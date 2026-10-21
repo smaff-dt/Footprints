@@ -34,6 +34,7 @@ interface ExtensionMessage {
   type: "pong" | "shown" | "snapshot" | "auto-progress" | "auto-done";
   version?: string;
   text?: string;
+  pct?: number;
   pending?: boolean;
   requestId?: string;
   ok?: boolean;
@@ -115,7 +116,7 @@ export function versionAtLeast(version: string | null, min: string): boolean {
  * background tab at the chosen device's width, pictured, measured at other
  * widths, and the snapshot arrives through useSnapshotInbox.
  */
-export function takeAutoSnapshot(payload: PagePayload, onProgress: (text: string) => void, timeoutMs = 240000): Promise<{ pending: boolean }> {
+export function takeAutoSnapshot(payload: PagePayload, onProgress: (text: string, pct: number | null) => void, timeoutMs = 240000): Promise<{ pending: boolean }> {
   const requestId = `fp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
@@ -124,7 +125,7 @@ export function takeAutoSnapshot(payload: PagePayload, onProgress: (text: string
     }, timeoutMs);
     function onMessage(event: MessageEvent) {
       if (event.source !== window || !isExtensionMessage(event.data)) return;
-      if (event.data.type === "auto-progress" && event.data.text) onProgress(event.data.text);
+      if (event.data.type === "auto-progress" && event.data.text) onProgress(event.data.text, typeof event.data.pct === "number" ? event.data.pct : null);
       if (event.data.type !== "auto-done" || event.data.requestId !== requestId) return;
       window.clearTimeout(timer);
       window.removeEventListener("message", onMessage);

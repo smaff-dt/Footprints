@@ -7,6 +7,7 @@
  */
 import { useState } from "react";
 import { Button } from "@dynatrace/strato-components/buttons";
+import { ProgressBar } from "@dynatrace/strato-components/content";
 import { DesktopIcon, ExternalLinkIcon, MobileIcon } from "@dynatrace/strato-icons";
 import { Filters, PageScope } from "../dql/queries";
 import { loadClickWidths, loadPageElements, loadPageVisits, loadScrollDepth } from "../hooks/data";
@@ -17,7 +18,7 @@ import { c } from "../theme";
 type Status =
   | { kind: "idle" }
   | { kind: "working" }
-  | { kind: "auto"; device: "desktop" | "mobile"; text: string }
+  | { kind: "auto"; device: "desktop" | "mobile"; text: string; pct: number }
   | { kind: "auto-done"; device: "desktop" | "mobile"; pending: boolean }
   | { kind: "opened" }
   | { kind: "problem"; message: string; payload: PagePayload | null }
@@ -36,7 +37,7 @@ export function ShowOnPage(props: {
   const version = useExtensionVersion();
   const installed = version !== null;
   /** Snapshots need this version of the extension (it records every block of the page and fixes zoom). */
-  const NEEDED = "0.5.1";
+  const NEEDED = "0.5.2";
   const upToDate = versionAtLeast(version, NEEDED);
   const updateMessage = `The Footprints extension needs an update (version ${NEEDED} or later; this browser has ${version}): open chrome://extensions, click ↻ on Footprints, then reload this page.`;
   const [status, setStatus] = useState<Status>({ kind: "idle" });
@@ -91,7 +92,7 @@ export function ShowOnPage(props: {
   }
 
   async function onAuto(device: "desktop" | "mobile") {
-    setStatus({ kind: "auto", device, text: "Preparing the data…" });
+    setStatus({ kind: "auto", device, text: "Preparing the data…", pct: 1 });
     try {
       if (!installed) throw new Error("not-installed");
       if (!upToDate) throw new Error(updateMessage);
@@ -101,12 +102,13 @@ export function ShowOnPage(props: {
       setStatus({
         kind: "auto",
         device,
+        pct: 2,
         text:
           widths.length > 0
             ? `taken at ${formatInt(plan.main)} px, the window width most visitors use${plan.others.length ? `, and measured at ${plan.others.map((w) => formatInt(w)).join(", ")} px` : ""}…`
             : "starting…",
       });
-      const res = await takeAutoSnapshot({ ...payload, capture: { device, width: plan.main, widths: plan.others } }, (text) => setStatus({ kind: "auto", device, text }));
+      const res = await takeAutoSnapshot({ ...payload, capture: { device, width: plan.main, widths: plan.others } }, (text, pct) => setStatus((cur) => ({ kind: "auto", device, text, pct: Math.max(pct ?? 0, cur.kind === "auto" ? cur.pct : 0) })));
       setStatus({ kind: "auto-done", device, pending: res.pending });
     } catch (err) {
       const raw = err instanceof Error ? err.message : String(err);
@@ -148,9 +150,14 @@ export function ShowOnPage(props: {
       </div>
 
       {status.kind === "auto" && (
-        <p role="status" style={{ margin: 0, fontSize: 14, color: c.muted }}>
-          {status.device === "desktop" ? "Desktop" : "Mobile"} snapshot: {status.text}
-        </p>
+        <div role="status" style={{ width: "100%", maxWidth: 520 }}>
+          <ProgressBar value={status.pct} min={0} max={100} aria-valuetext={`${status.pct}%`}>
+            <ProgressBar.Label>
+              {status.device === "desktop" ? "Desktop" : "Mobile"} snapshot: {status.text}
+            </ProgressBar.Label>
+            <ProgressBar.Value>{status.pct}%</ProgressBar.Value>
+          </ProgressBar>
+        </div>
       )}
       {status.kind === "auto-done" && (
         <p role="status" style={{ margin: 0, fontSize: 14, color: c.muted }}>

@@ -58,6 +58,25 @@ with sync_playwright() as p:
     print("2. picker opened: page-list queries:", count("by: {fp_page}"), "| rows:", pg.locator("[role=option]").count())
     pg.click("[role=option]:has-text('/ (home page)')")
     print("   capture buttons:", pg.locator("button:has-text('snapshot'), button:has-text('Open the page')").all_inner_texts())
+    # The extension (simulated): a desktop snapshot reports its progress, shown as a bar.
+    pg.evaluate("""() => {
+      window.postMessage({ source: 'footprints-extension', type: 'pong', version: '0.5.2' }, '*');
+      window.addEventListener('message', (e) => {
+        if (!e.data || e.data.source !== 'footprints-app' || e.data.type !== 'auto-snapshot') return;
+        const id = e.data.requestId;
+        const say = (text, pct) => window.postMessage({ source: 'footprints-extension', type: 'auto-progress', text, pct }, '*');
+        setTimeout(() => say('Loading the pictures…', 30), 100);
+        setTimeout(() => say('Taking the picture…', 64), 300);
+        setTimeout(() => window.postMessage({ source: 'footprints-extension', type: 'auto-done', requestId: id, ok: true }, '*'), 2500);
+      });
+    }""")
+    pg.wait_for_timeout(300)
+    pg.click("button:has-text('Desktop snapshot')")
+    pg.wait_for_timeout(900)
+    print("   progress bar:", pg.locator("text=64%").count() == 1, "|", pg.inner_text("[role=status]").replace("\n", " ")[:90])
+    pg.screenshot(path=str(HERE / "app-progress.png"))
+    pg.wait_for_selector("text=Desktop snapshot saved", timeout=8000)
+    print("   then:", pg.inner_text("text=Desktop snapshot saved"))
     pg.click("[role=listitem] >> nth=0")
     pg.wait_for_selector("text=Suggest zones", timeout=10000)
     print("3. analysis screen:", pg.inner_text("h2"), "|", pg.locator("h2 + p").inner_text())
