@@ -7,6 +7,10 @@ import { num, runQuery, Row, str } from "../dql/client";
 import {
   applicationNamesQuery,
   applicationsQuery,
+  clickPositionsQuery,
+  clickWidthsQuery,
+  elementConversionQuery,
+  pageConversionQuery,
   Filters,
   GroupBy,
   pagesQuery,
@@ -201,4 +205,81 @@ export function useSections(
 ): QueryState<Section[]> {
   const query = filters && scope ? sectionsQuery(filters, scope, groupBy) : null;
   return useQuery(query, groupBy === "sections" ? mapSections : mapElements, refreshKey);
+}
+
+// ── Click heatmap ────────────────────────────────────────────────────────────
+
+export interface WidthCount {
+  width: number;
+  clicks: number;
+}
+
+function mapWidths(rows: Row[]): WidthCount[] {
+  return rows.map((r) => ({ width: num(r["width"]), clicks: num(r["clicks"]) })).filter((w) => w.width > 0);
+}
+
+export function useClickWidths(filters: Filters | null, scope: PageScope | null, refreshKey: number): QueryState<WidthCount[]> {
+  return useQuery(filters && scope ? clickWidthsQuery(filters, scope) : null, mapWidths, refreshKey);
+}
+
+export interface HeatCell {
+  x: number;
+  y: number;
+  clicks: number;
+}
+
+function mapCells(rows: Row[]): HeatCell[] {
+  return rows.map((r) => ({ x: num(r["x"]), y: num(r["y"]), clicks: num(r["clicks"]) })).filter((c) => c.clicks > 0);
+}
+
+export function useClickPositions(
+  filters: Filters | null,
+  scope: PageScope | null,
+  widths: [number, number] | null,
+  refreshKey: number,
+): QueryState<HeatCell[]> {
+  return useQuery(filters && scope && widths ? clickPositionsQuery(filters, scope, widths[0], widths[1]) : null, mapCells, refreshKey);
+}
+
+// ── Conversions ──────────────────────────────────────────────────────────────
+
+export interface Conversion {
+  visits: number;
+  converted: number;
+}
+
+export interface ElementConversion extends Conversion {
+  xpath: string[];
+}
+
+function mapPageConversion(rows: Row[]): Conversion {
+  return { visits: num(rows[0]?.["visits"]), converted: num(rows[0]?.["converted"]) };
+}
+
+function mapElementConversions(rows: Row[]): ElementConversion[] {
+  const out: ElementConversion[] = [];
+  for (const r of rows) {
+    let xpath: unknown;
+    try {
+      xpath = JSON.parse(str(r["section"]));
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(xpath) || xpath.length === 0) continue;
+    out.push({ xpath: xpath.map(String), visits: num(r["visits"]), converted: num(r["converted"]) });
+  }
+  return out;
+}
+
+export function usePageConversion(filters: Filters | null, scope: PageScope | null, goal: PageScope | null, refreshKey: number): QueryState<Conversion> {
+  return useQuery(filters && scope && goal ? pageConversionQuery(filters, scope, goal) : null, mapPageConversion, refreshKey);
+}
+
+export function useElementConversions(
+  filters: Filters | null,
+  scope: PageScope | null,
+  goal: PageScope | null,
+  refreshKey: number,
+): QueryState<ElementConversion[]> {
+  return useQuery(filters && scope && goal ? elementConversionQuery(filters, scope, goal) : null, mapElementConversions, refreshKey);
 }

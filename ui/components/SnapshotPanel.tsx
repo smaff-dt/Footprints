@@ -4,12 +4,21 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import type { Device, Filters, PageScope } from "../dql/queries";
-import { usePageElements, usePageVisits, useScrollDepth } from "../hooks/data";
+import {
+  useClickPositions,
+  useClickWidths,
+  useElementConversions,
+  usePageConversion,
+  usePageElements,
+  usePageVisits,
+  useScrollDepth,
+} from "../hooks/data";
+import { usePersistentState } from "../lib/storage";
 import { deleteSnapshot, listSnapshots, loadSnapshot, saveNames, Snapshot, SnapshotMeta } from "../lib/snapshots";
 import { deviceName, formatWhen } from "../lib/format";
 import { c } from "../theme";
 import { Dropdown } from "./Controls";
-import { SnapshotView } from "./SnapshotView";
+import { MapMode, SnapshotView } from "./SnapshotView";
 import { Empty, ErrorNotice, Loading } from "./States";
 
 export function SnapshotPanel(props: {
@@ -23,6 +32,8 @@ export function SnapshotPanel(props: {
   /** Changes when a new snapshot has been saved; `preferId` is then selected. */
   inboxTick: number;
   preferId: string | null;
+  /** Conversion goal: a page or page group reached later in the visit. */
+  goal: { scope: PageScope; label: string } | null;
 }) {
   const { filters, page } = props;
   const [list, setList] = useState<SnapshotMeta[] | null>(null);
@@ -79,6 +90,20 @@ export function SnapshotPanel(props: {
   const scroll = useScrollDepth(dataFilters, tpl, props.refreshKey);
   const deviceVisits = usePageVisits(snapDevice && snapDevice !== filters.device ? dataFilters : null, tpl, props.refreshKey);
   const pageVisits = snapDevice && snapDevice !== filters.device ? deviceVisits.data ?? 0 : props.pageVisits;
+  // Heatmaps and conversions are loaded only when they are shown.
+  const [mode, setMode] = usePersistentState<MapMode>("fp.mapMode", "areas");
+  const snapW = snapshot?.viewport?.w ?? 0;
+  const range = useMemo<[number, number] | null>(() => {
+    if (!snapW) return null;
+    const tol = Math.max(40, Math.round(snapW * 0.04));
+    return [snapW - tol, snapW + tol];
+  }, [snapW]);
+  const clickTpl = mode === "clicks" ? tpl : null;
+  const widths = useClickWidths(dataFilters, clickTpl, props.refreshKey);
+  const cells = useClickPositions(dataFilters, clickTpl, range, props.refreshKey);
+  const goalScope = props.goal?.scope ?? null;
+  const pageConv = usePageConversion(dataFilters, tpl, goalScope, props.refreshKey);
+  const elConv = useElementConversions(dataFilters, tpl, goalScope, props.refreshKey);
   const meta = useMemo(() => list?.find((s) => s.id === selectedId) ?? null, [list, selectedId]);
 
   async function rename(areaKey: string, name: string) {
@@ -160,6 +185,24 @@ export function SnapshotPanel(props: {
           deviceKey={dataFilters.device}
           saving={saving}
           onRename={rename}
+          mode={mode}
+          onMode={setMode}
+          heat={
+            mode === "clicks" && range
+              ? { cells: cells.data, widths: widths.data, range, loading: cells.loading || widths.loading, error: cells.error ?? widths.error }
+              : null
+          }
+          goal={
+            props.goal
+              ? {
+                  label: props.goal.label,
+                  page: pageConv.data,
+                  elements: elConv.data,
+                  loading: pageConv.loading || elConv.loading,
+                  error: pageConv.error ?? elConv.error,
+                }
+              : null
+          }
         />
       )}
     </div>

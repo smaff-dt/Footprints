@@ -17,12 +17,25 @@ elements = [{"xpath": x, "clicks": c, "visits": v, "label": "x"} for x, c, v in 
 elements.append({"xpath": ["html", "body", 'div[@id="__next"]', "div2", "a"], "clicks": 40, "visits": 40, "label": "x"})
 elements.append({"xpath": ['//*[@id="__next"]', "div", "div", "a"], "clicks": 30, "visits": 30, "label": "x"})
 elements.append({"xpath": ["html", "body", "div", "nothing-here"], "clicks": 10, "visits": 10, "label": "x"})
+# Click positions: a cluster on each product button and on the hero button.
+cells = []
+for e in snapshot["map"]["elements"]:
+    b = e["box"]
+    if "Add" in e["name"] or "Shop" in e["name"]:
+        for dx in range(-16, 17, 8):
+            for dy in range(-8, 9, 8):
+                cells.append({"x": b["x"] + b["w"] / 2 + dx, "y": b["y"] + b["h"] / 2 + dy, "clicks": 50 if "Shop" in e["name"] else 10})
+conversions = [{"xpath": x, "visits": v, "converted": v // (3 if i % 2 else 8)} for i, (x, c, v) in enumerate(shop)]
 data = {
     "snapshot": snapshot,
     "elements": elements,
     "scroll": {"step": 50, "steps": [[900, 20000], [1300, 20000]], "visits": 40000},
     "pageVisits": 40000,
     "device": "desktop",
+    "cells": cells,
+    "widths": [{"width": 1280, "clicks": 30000}, {"width": snapshot["viewport"]["w"], "clicks": 500}],
+    "conversions": conversions,
+    "pageConversion": {"visits": 40000, "converted": 4000},
 }
 
 html = f"""<!doctype html><html><head><meta charset="utf-8"></head><body>
@@ -86,6 +99,22 @@ with sync_playwright() as p:
     sel = pg.locator("[aria-label=Selected]").count()
     pg.click("aside button:has-text('Hot products') >> nth=-1")
     print("area selected then deselected from the sidebar:", sel == 1, pg.locator("[aria-label=Selected]").count() == 0)
+
+    # Conversion metric, heatmaps
+    print("metric options with a goal:", pg.eval_on_selector_all("select option", "els => els.map(e => e.textContent)"))
+    pg.select_option("select", "conversion")
+    print("labels (conversion):", pg.eval_on_selector_all("[data-area] span", "els => els.map(e => e.textContent)"))
+    pg.mouse.move(target["x"], target["y"]); pg.wait_for_timeout(150)
+    print("element card with goal:", pg.inner_text("[role=tooltip]").replace("\n", " · ")[-120:])
+    pg.click("text=Click heatmap"); pg.wait_for_timeout(300)
+    print("click heatmap: canvas drawn:", pg.evaluate("(() => { const c = document.querySelector('canvas'); if (!c) return false; const d = c.getContext('2d').getImageData(0,0,c.width,c.height).data; let n=0; for (let i=3;i<d.length;i+=4) if (d[i]>0) n++; return n; })()"), "· areas hidden:", pg.locator("[data-area]").count() == 0)
+    print("heatmap notes:", [t[:110] for t in pg.locator("[role=note]").all_inner_texts()])
+    pg.screenshot(path=str(HERE / "click-heatmap.png"), full_page=True)
+    pg.click("text=Scroll heatmap"); pg.wait_for_timeout(200)
+    pg.mouse.move(target["x"], target["y"] + 300); pg.wait_for_timeout(150)
+    print("scroll heatmap hover:", pg.inner_text("[role=tooltip]").replace("\n", " · ")[:80])
+    pg.screenshot(path=str(HERE / "scroll-heatmap.png"), full_page=True)
+    pg.click("text=Areas"); pg.wait_for_timeout(100)
 
     # Rename the first area
     pg.click("aside [aria-label^=Rename] >> nth=0")

@@ -66,7 +66,7 @@ export function App() {
   const [inbox, setInbox] = useState<{ tick: number; id: string | null }>({ tick: 0, id: null });
   const [savedNote, setSavedNote] = useState<string | null>(null);
   const [groups, setGroups] = useState<StoredGroups>({ groups: [], docId: null, version: null });
-  const [editing, setEditing] = useState<{ group: PageGroup | null } | null>(null);
+  const [editing, setEditing] = useState<{ group: PageGroup | null; forGoal?: boolean } | null>(null);
   const [groupSaving, setGroupSaving] = useState(false);
   const [groupError, setGroupError] = useState<string | null>(null);
 
@@ -101,6 +101,14 @@ export function App() {
     }
   }, [pages.data, choices, choice, setPage]);
   const activePage = choice ? choice.key : null;
+
+  // Conversion goal: a page or page group reached later in the visit (optional).
+  const [goalKey, setGoalKey] = usePersistentState("fp.goal", "");
+  const looseGoal = useMemo(() => looseChoice(goalKey), [goalKey]);
+  const goalChoice =
+    choices.find((ch) => ch.key === goalKey) ??
+    (looseGoal && pages.data?.some((p) => pageHost(p.url) === pageHost(goalKey)) ? looseGoal : null);
+  const goal = useMemo(() => (goalChoice ? { scope: goalChoice.scope, label: goalChoice.label } : null), [goalChoice]);
   const scope = choice?.scope ?? null;
   // A group: its pages, most visited first (the first one is opened by "Show on the page").
   const groupPages = useScopePages(filters, choice?.kind === "group" ? scope : null, refreshKey);
@@ -113,7 +121,8 @@ export function App() {
       const group: PageGroup = { ...g, id: g.id ?? newGroupId() };
       const next = g.id ? groups.groups.map((x) => (x.id === g.id ? group : x)) : [...groups.groups, group];
       setGroups(await storeGroups(groups, next));
-      setPage(`group:${group.id}`);
+      if (editing?.forGoal) setGoalKey(`group:${group.id}`);
+      else setPage(`group:${group.id}`);
       setEditing(null);
     } catch (e) {
       setGroupError(e instanceof Error ? e.message : String(e));
@@ -268,6 +277,27 @@ export function App() {
               setEditing({ group });
             }}
           />
+          <PagePicker
+            label="Conversion goal"
+            placeholder="No goal"
+            noneLabel="No goal"
+            onClear={() => setGoalKey("")}
+            filters={filters}
+            choices={choices}
+            complete={!!pages.data && pages.data.length < PAGE_LIMIT}
+            value={goalKey}
+            current={goalChoice}
+            loading={pages.loading}
+            onChange={(ch) => setGoalKey(ch.key)}
+            onNewGroup={() => {
+              setGroupError(null);
+              setEditing({ group: null, forGoal: true });
+            }}
+            onEditGroup={(group) => {
+              setGroupError(null);
+              setEditing({ group, forGoal: true });
+            }}
+          />
           <Dropdown label="Period" value={timeframe} options={TIMEFRAMES} onChange={setTimeframe} />
           <Segmented label="Device" value={device} options={DEVICES} onChange={setDevice} />
         </Card>
@@ -345,6 +375,7 @@ export function App() {
                   refreshKey={refreshKey}
                   inboxTick={inbox.tick}
                   preferId={inbox.id}
+                  goal={goal}
                 />
               </Card>
             )}

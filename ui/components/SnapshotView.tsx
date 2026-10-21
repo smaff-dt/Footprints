@@ -7,7 +7,8 @@
  * the picture and the map.
  */
 import { CSSProperties, KeyboardEvent, MouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import type { PageElement, ScrollDepth } from "../hooks/data";
+import type { Conversion, ElementConversion, HeatCell, PageElement, ScrollDepth, WidthCount } from "../hooks/data";
+import { ClickHeatLayer, HeatLegend, ScrollHeatLayer } from "./Heatmaps";
 import { deviceName, formatInt, formatWhen } from "../lib/format";
 import {
   AREA_METRICS,
@@ -19,19 +20,39 @@ import {
   exposureOf,
   formatMetric,
   matchClicks,
+  matchConversions,
   MatchedElement,
+  reachAt,
   metricValue,
   startingDetail,
 } from "../lib/snapshotMath";
 import type { Box, Snapshot } from "../lib/snapshots";
 import { c } from "../theme";
 
+export type MapMode = "areas" | "clicks" | "scroll";
+
+export interface HeatData {
+  cells: HeatCell[] | null;
+  widths: WidthCount[] | null;
+  range: [number, number];
+  loading: boolean;
+  error: string | null;
+}
+
+export interface GoalData {
+  label: string;
+  page: Conversion | null;
+  elements: ElementConversion[] | null;
+  loading: boolean;
+  error: string | null;
+}
+
 type Target = { kind: "element"; index: number } | { kind: "area"; id: string };
 type Hover = (Target & { x: number; y: number }) | null;
 
 const HEAT = ["#F6D9A8", "#EE9B4D", "#B8461A"];
 
-function heat(ratio: number): { bg: string; fg: string } {
+function chipColors(ratio: number): { bg: string; fg: string } {
   if (ratio >= 0.66) return { bg: HEAT[2], fg: "#FFFFFF" };
   if (ratio >= 0.33) return { bg: HEAT[1], fg: "#16191F" };
   return { bg: HEAT[0], fg: "#16191F" };
@@ -61,11 +82,18 @@ export function SnapshotView(props: {
   deviceKey: string;
   saving: boolean;
   onRename: (areaKey: string, name: string) => void;
+  mode?: MapMode;
+  onMode?: (mode: MapMode) => void;
+  heat?: HeatData | null;
+  goal?: GoalData | null;
 }) {
   const { snapshot, scroll, pageVisits } = props;
+  const mode: MapMode = props.mode ?? "areas";
+  const goal = props.goal ?? null;
   const map = snapshot.map;
   const matching = useMemo(() => matchClicks(map, props.elements), [map, props.elements]);
   const hasScroll = !!(scroll && scroll.visits);
+  const conversions = useMemo(() => (goal?.elements ? matchConversions(map, goal.elements) : null), [map, goal?.elements]);
 
   const [metric, setMetric] = useState<AreaMetric>("seen");
   const [detail, setDetail] = useState<number>(() => startingDetail(map, matching));
@@ -73,6 +101,7 @@ export function SnapshotView(props: {
   const [showLines, setShowLines] = useState(true);
   const [sidebar, setSidebar] = useState(true);
   const [hover, setHover] = useState<Hover>(null);
+  const [pointerY, setPointerY] = useState<{ pageY: number; x: number; y: number } | null>(null);
   const [pinned, setPinned] = useState<Target | null>(null);
   // Areas hidden from the picture (by key, so the choice survives a change of detail).
   const [hidden, setHidden] = useState<Set<string>>(() => new Set());
@@ -95,14 +124,14 @@ export function SnapshotView(props: {
   // A new snapshot or new data: start again from a sensible detail level.
   useEffect(() => setDetail(startingDetail(map, matching)), [map, matching]);
   useEffect(() => setPinned((p) => (p && p.kind === "area" ? null : p)), [detail]);
-  const metricOptions = AREA_METRICS.filter((m) => hasScroll || !m.needsScroll);
+  const metricOptions = AREA_METRICS.filter((m) => (hasScroll || !m.needsScroll) && (conversions || !m.needsGoal));
   const activeMetric: AreaMetric = metricOptions.some((m) => m.value === metric) ? metric : "share";
 
   const stats = useMemo(() => areasAt(map, matching, detail), [map, matching, detail]);
   const statById = useMemo(() => new Map(stats.map((s) => [s.area.id, s])), [stats]);
   const numbers = useMemo(
-    () => new Map(stats.map((s) => [s.area.id, areaNumbers(s, matching.totalClicks, pageVisits, scroll)])),
-    [stats, matching.totalClicks, pageVisits, scroll],
+    () => new Map(stats.map((s) => [s.area.id, areaNumbers(s, matching.totalClicks, pageVisits, scroll, conversions)])),
+    [stats, matching.totalClicks, pageVisits, scroll, conversions],
   );
   const valueOf = (s: AreaStat) => metricValue(numbers.get(s.area.id)!, activeMetric) ?? 0;
   const maxValue = Math.max(1e-9, ...stats.map(valueOf));
@@ -183,17 +212,55 @@ export function SnapshotView(props: {
     notes.push("“Seen by” mixes desktop and mobile visits, whose pages have different lengths. Choose one device for exact numbers.");
   }
   if (snapshot.truncated) notes.push("The page is very long: the snapshot stops at 16,000 pixels.");
+  if (goal?.error) notes.push(`Could not compute conversions: ${goal.error}`);
+
+  // Click heatmap: only visits whose window was about as wide as the snapshot saw the same layout.
+  const heat = props.heat ?? null;
+  const heatClicks = heat?.cells ? heat.cells.reduce((sum, p) => sum + p.clicks, 0) : 0;
+  const widthTotal = heat?.widths ? heat.widths.reduce((sum, w) => sum + w.clicks, 0) : 0;
+  const topWidth = heat?.widths?.[0] ?? null;
+  const inRange = heat?.widths ? heat.widths.filter((w) => w.width >= heat.range[0] && w.width <= heat.range[1]).reduce((sum, w) => sum + w.clicks, 0) : 0;
+  const heatNote =
+    mode === "clicks" && heat && heat.widths && widthTotal > 0 && inRange / widthTotal < 0.5 && topWidth && (topWidth.width < heat.range[0] || topWidth.width > heat.range[1])
+      ? `Only ${pctOf(inRange, widthTotal)} of the clicks come from windows as wide as this snapshot (${snapshot.viewport.w} px). Most come from windows ${formatInt(topWidth.width)} px wide: for a fuller heatmap, take a snapshot in a window of that width.`
+      : null;
 
   const hl = (t: Target | null): Box | null =>
     !t ? null : t.kind === "element" ? map.elements[t.index]?.box ?? null : statById.get(t.id)?.area.box ?? null;
   const hoverBox = hover && !sameTarget(hover, pinned) ? hl(hover) : null;
   const pinnedBox = hl(pinned);
 
+  // The structural path of each element ("html[1]/body[1]/…"), to know what contains what.
+  const paths = useMemo(() => map.elements.map((e) => e.keys.find((k) => k.startsWith("html[1]/")) ?? null), [map]);
+
+  /** Clicks recorded on elements inside this one, and on the nearest clicked element around it. */
+  function related(index: number): Related {
+    const path = paths[index];
+    if (!path) return { inside: 0, insideCount: 0, around: null };
+    let inside = 0;
+    let insideCount = 0;
+    let around: Related["around"] = null;
+    for (const m of matching.byElement.values()) {
+      if (m.index === index) continue;
+      const p = paths[m.index];
+      if (!p) continue;
+      if (p.startsWith(`${path}/`)) {
+        inside += m.clicks;
+        insideCount += 1;
+      } else if (path.startsWith(`${p}/`) && (!around || p.length > around.depth)) {
+        around = { name: map.elements[m.index].name, clicks: m.clicks, visits: m.visits, depth: p.length };
+      }
+    }
+    return { inside, insideCount, around };
+  }
+
   function cardFor(t: Target): ReactNode {
     if (t.kind === "element") {
       const el = map.elements[t.index];
       return (
         <ElementCard
+          related={related(t.index)}
+          goal={goal && conversions ? { label: goal.label, page: goal.page, mine: conversions.get(t.index) ?? null } : null}
           name={el.name}
           m={matching.byElement.get(t.index) ?? null}
           seen={exposureOf(scroll, el.box)}
@@ -208,13 +275,58 @@ export function SnapshotView(props: {
       );
     }
     const s = statById.get(t.id);
-    return s ? <AreaCard stat={s} name={nameOf(s)} numbers={numbers.get(s.area.id)!} snapshot={snapshot} pageVisits={pageVisits} /> : null;
+    return s ? (
+      <AreaCard
+        stat={s}
+        name={nameOf(s)}
+        numbers={numbers.get(s.area.id)!}
+        snapshot={snapshot}
+        pageVisits={pageVisits}
+        goal={goal && conversions ? { label: goal.label, page: goal.page } : null}
+      />
+    ) : null;
   }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       {/* Top bar: what to show */}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px 20px" }}>
+        {props.onMode && (
+          <div role="radiogroup" aria-label="View" style={{ display: "flex", padding: 3, borderRadius: 12, background: c.surfaceAlt, border: `1px solid ${c.line}` }}>
+            {(
+              [
+                ["areas", "Areas"],
+                ["clicks", "Click heatmap"],
+                ["scroll", "Scroll heatmap"],
+              ] as [MapMode, string][]
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                role="radio"
+                aria-checked={mode === value}
+                disabled={value === "scroll" && !hasScroll}
+                onClick={() => props.onMode!(value)}
+                style={{
+                  minHeight: 36,
+                  padding: "0 14px",
+                  borderRadius: 9,
+                  border: 0,
+                  background: mode === value ? c.surface : "transparent",
+                  boxShadow: mode === value ? "0 1px 3px rgba(22,25,31,0.18)" : "none",
+                  color: c.ink,
+                  fontWeight: mode === value ? 700 : 500,
+                  cursor: value === "scroll" && !hasScroll ? "not-allowed" : "pointer",
+                  opacity: value === "scroll" && !hasScroll ? 0.5 : 1,
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {mode === "areas" && (
+        <>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: c.muted }}>
           Show
           <select
@@ -243,7 +355,11 @@ export function SnapshotView(props: {
           />
         </label>
         <Toggle label="Clicked elements" checked={showDots} onChange={setShowDots} />
-        {hasScroll && <Toggle label="Scroll lines" checked={showLines} onChange={setShowLines} />}
+        </>
+        )}
+        {mode === "clicks" && <HeatLegend low="Fewer clicks" high="More clicks" />}
+        {mode === "scroll" && <HeatLegend low="Few visits get here" high="All visits" />}
+        {hasScroll && mode !== "clicks" && <Toggle label="Scroll lines" checked={showLines} onChange={setShowLines} />}
         <button
           type="button"
           onClick={() => setSidebar((s) => !s)}
@@ -269,7 +385,24 @@ export function SnapshotView(props: {
         {props.deviceKey !== "all" ? ` · numbers from ${props.deviceKey} visits` : ""} · {pctOf(matching.matchedClicks, matching.totalClicks)} of this
         period's clicks are on it · point at anything on the page, click to select it
         {props.saving ? " · saving names…" : ""}
+        {goal && (goal.loading ? " · computing conversions…" : goal.page ? ` · goal “${goal.label}”: ${pctOf(goal.page.converted, goal.page.visits)} of visits reach it` : "")}
       </div>
+      {mode === "clicks" && heat && (
+        <div style={{ fontSize: 13, color: c.muted }}>
+          {heat.loading
+            ? "Placing the clicks…"
+            : heat.error
+              ? `Could not load click positions: ${heat.error}`
+              : `${formatInt(heatClicks)} clicks from visits with a window ${formatInt(heat.range[0])}–${formatInt(heat.range[1])} px wide, so they saw the page laid out like this snapshot${
+                  matching.totalClicks ? ` (${pctOf(heatClicks, matching.totalClicks)} of the page's clicks)` : ""
+                }.`}
+        </div>
+      )}
+      {heatNote && (
+        <div role="note" style={{ padding: "10px 12px", borderRadius: 10, background: c.warnSoft, color: c.warnInk, fontSize: 14 }}>
+          {heatNote}
+        </div>
+      )}
       {notes.map((n) => (
         <div key={n} role="note" style={{ padding: "10px 12px", borderRadius: 10, background: c.warnSoft, color: c.warnInk, fontSize: 14 }}>
           {n}
@@ -283,8 +416,13 @@ export function SnapshotView(props: {
           onMouseMove={(e) => {
             const t = targetAt(e);
             setHover(t ? { ...t, x: e.clientX, y: e.clientY } : null);
+            const rect = e.currentTarget.getBoundingClientRect();
+            setPointerY(mode === "scroll" ? { pageY: ((e.clientY - rect.top) / rect.height) * H, x: e.clientX, y: e.clientY } : null);
           }}
-          onMouseLeave={() => setHover(null)}
+          onMouseLeave={() => {
+            setHover(null);
+            setPointerY(null);
+          }}
           onClick={(e) => {
             const t = targetAt(e);
             setPinned((p) => (sameTarget(p, t) ? null : t));
@@ -302,12 +440,14 @@ export function SnapshotView(props: {
           }}
         >
           <img src={snapshot.image.dataUrl} alt={`Snapshot of ${snapshot.title || snapshot.url}`} draggable={false} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} />
+          {mode === "clicks" && heat?.cells && <ClickHeatLayer cells={heat.cells} width={W} height={H} />}
+          {mode === "scroll" && hasScroll && <ScrollHeatLayer scroll={scroll!} height={H} />}
           {stats
-            .filter((s) => !hidden.has(s.area.key))
+            .filter((s) => mode === "areas" && !hidden.has(s.area.key))
             .sort((a, b) => b.area.box.w * b.area.box.h - a.area.box.w * a.area.box.h)
             .map((s) => {
               const r = valueOf(s) / maxValue;
-              const h = heat(r);
+              const h = chipColors(r);
               const isSel = pinned?.kind === "area" && pinned.id === s.area.id;
               return (
                 <div
@@ -342,7 +482,7 @@ export function SnapshotView(props: {
                 </div>
               );
             })}
-          {showLines &&
+          {showLines && mode !== "clicks" &&
             lineGroups.map((g) => (
               <div key={g.d} style={{ position: "absolute", left: 0, right: 0, top: `${(100 * g.d) / H}%`, borderTop: "2px dashed rgba(47,75,216,0.85)", pointerEvents: "none" }}>
                 <span style={{ position: "absolute", right: 8, top: -20, padding: "1px 8px", borderRadius: "6px 6px 0 0", background: "#2F4BD8", color: "#FFFFFF", fontSize: 11, fontWeight: 700 }}>
@@ -350,7 +490,7 @@ export function SnapshotView(props: {
                 </span>
               </div>
             ))}
-          {showDots &&
+          {showDots && mode === "areas" &&
             matched.map((m) => {
               const e = map.elements[m.index];
               const size = 8 + Math.round(14 * Math.sqrt(m.clicks / maxClicks));
@@ -433,7 +573,17 @@ export function SnapshotView(props: {
         )}
       </div>
 
-      {hover && !sameTarget(hover, pinned) && <HoverCard x={hover.x} y={hover.y}>{cardFor(hover)}</HoverCard>}
+      {hover && !sameTarget(hover, pinned) && (
+        <HoverCard x={hover.x} y={hover.y}>
+          {pointerY && hasScroll && (
+            <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${c.line}` }}>
+              <span style={{ fontSize: 20, fontWeight: 800, color: "#B8461A" }}>{formatMetric(reachAt(scroll, pointerY.pageY), "seen")}</span>{" "}
+              <span style={{ color: c.muted }}>of visits scroll down to here</span>
+            </div>
+          )}
+          {cardFor(hover)}
+        </HoverCard>
+      )}
     </div>
   );
 }
@@ -509,7 +659,14 @@ function Stat(props: { label: string; value: string; accent?: boolean }) {
 
 const kicker: CSSProperties = { fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: c.muted };
 
-function AreaCard(props: { stat: AreaStat; name: string; numbers: ReturnType<typeof areaNumbers>; snapshot: Snapshot; pageVisits: number }) {
+function AreaCard(props: {
+  stat: AreaStat;
+  name: string;
+  numbers: ReturnType<typeof areaNumbers>;
+  snapshot: Snapshot;
+  pageVisits: number;
+  goal: { label: string; page: Conversion | null } | null;
+}) {
   const { stat, numbers } = props;
   const top = stat.elements
     .slice()
@@ -524,6 +681,17 @@ function AreaCard(props: { stat: AreaStat; name: string; numbers: ReturnType<typ
         <Stat label="Share of clicks" value={formatMetric(numbers.share, "share")} />
         <Stat label="Clicks / 100 views" value={formatMetric(numbers.per100, "per100")} />
       </div>
+      {props.goal && (
+        <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 8, background: c.surfaceAlt }}>
+          <div style={{ fontSize: 11, color: c.muted }}>Reached “{props.goal.label}” after a click here</div>
+          <div style={{ fontSize: 16, fontWeight: 800 }}>
+            {formatMetric(numbers.conversion, "conversion")}
+            {props.goal.page && props.goal.page.visits > 0 && (
+              <span style={{ fontSize: 12, fontWeight: 500, color: c.muted }}> · page average {pctOf(props.goal.page.converted, props.goal.page.visits)}</span>
+            )}
+          </div>
+        </div>
+      )}
       <div style={{ marginTop: 8, fontWeight: 600 }}>Most clicked inside</div>
       <ul style={{ margin: "4px 0 0", paddingLeft: 16 }}>
         {top.map((m) => (
@@ -536,7 +704,24 @@ function AreaCard(props: { stat: AreaStat; name: string; numbers: ReturnType<typ
   );
 }
 
-function ElementCard(props: { m: MatchedElement | null; name: string; area: string | null; seen: number | null; pageVisits: number; totalClicks: number }) {
+interface Related {
+  inside: number;
+  insideCount: number;
+  around: { name: string; clicks: number; visits: number; depth: number } | null;
+}
+
+function ElementCard(props: {
+  m: MatchedElement | null;
+  name: string;
+  area: string | null;
+  seen: number | null;
+  pageVisits: number;
+  totalClicks: number;
+  related: Related;
+  goal: { label: string; page: Conversion | null; mine: { visits: number; converted: number } | null } | null;
+}) {
+  const r = props.related;
+  const g = props.goal;
   const { m, seen, pageVisits } = props;
   const seenVisits = seen !== null ? seen * pageVisits : 0;
   return (
@@ -552,6 +737,28 @@ function ElementCard(props: { m: MatchedElement | null; name: string; area: stri
         <Stat label="Clicks" value={formatInt(m?.clicks ?? 0)} />
         <Stat label="Share of page clicks" value={m ? pctOf(m.clicks, props.totalClicks) : "0%"} />
       </div>
+      {r.inside > 0 && (
+        <div style={{ marginTop: 8, color: c.muted }}>
+          Plus {formatInt(r.inside)} clicks on {r.insideCount === 1 ? "an element" : `${r.insideCount} elements`} inside it.
+        </div>
+      )}
+      {g && (
+        <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 8, background: c.surfaceAlt }}>
+          <div style={{ fontSize: 11, color: c.muted }}>Reached “{g.label}” after clicking it</div>
+          <div style={{ fontSize: 16, fontWeight: 800 }}>
+            {g.mine && g.mine.visits > 0 ? pctOf(g.mine.converted, g.mine.visits) : "–"}
+            {g.page && g.page.visits > 0 && (
+              <span style={{ fontSize: 12, fontWeight: 500, color: c.muted }}> · page average {pctOf(g.page.converted, g.page.visits)}</span>
+            )}
+          </div>
+        </div>
+      )}
+      {!m && r.around && (
+        <div style={{ marginTop: 8, color: c.muted }}>
+          It is part of <strong style={{ color: c.ink }}>{r.around.name}</strong>, clicked by {pctOf(r.around.visits, pageVisits)} of visits: Dynatrace
+          recorded those clicks on that larger element.
+        </div>
+      )}
     </>
   );
 }
@@ -600,7 +807,7 @@ function AreaRow(props: {
     }
   }
 
-  const h = heat(props.ratio);
+  const h = chipColors(props.ratio);
   return (
     <div
       style={{

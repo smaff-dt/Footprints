@@ -158,32 +158,76 @@ export function depthReachedBy(scroll: ScrollDepth | null, share: number): numbe
 
 // ── Metrics shown on the snapshot ────────────────────────────────────────────
 
-export type AreaMetric = "seen" | "share" | "per100";
+export type AreaMetric = "seen" | "share" | "per100" | "conversion";
 
-export const AREA_METRICS: { value: AreaMetric; label: string; needsScroll: boolean }[] = [
+export const AREA_METRICS: { value: AreaMetric; label: string; needsScroll: boolean; needsGoal?: boolean }[] = [
   { value: "seen", label: "Seen by", needsScroll: true },
   { value: "share", label: "Share of clicks", needsScroll: false },
   { value: "per100", label: "Clicks per 100 views", needsScroll: true },
+  { value: "conversion", label: "Conversion after a click", needsScroll: false, needsGoal: true },
 ];
 
 export interface AreaNumbers {
   seen: number | null; // 0..1
   share: number; // 0..1
   per100: number | null; // clicks per 100 visits that saw it
+  conversion: number | null; // 0..1, of the visits that clicked in it
 }
 
-export function areaNumbers(stat: AreaStat, totalClicks: number, pageVisits: number, scroll: ScrollDepth | null): AreaNumbers {
+export function areaNumbers(
+  stat: AreaStat,
+  totalClicks: number,
+  pageVisits: number,
+  scroll: ScrollDepth | null,
+  conversions: ConversionMatching | null = null,
+): AreaNumbers {
   const seen = exposureOf(scroll, stat.area.box);
   const seenVisits = seen !== null ? seen * pageVisits : 0;
+  let conversion: number | null = null;
+  if (conversions) {
+    let visits = 0;
+    let converted = 0;
+    for (const m of stat.elements) {
+      const c = conversions.get(m.index);
+      if (c) {
+        visits += c.visits;
+        converted += c.converted;
+      }
+    }
+    conversion = visits > 0 ? converted / visits : null;
+  }
   return {
     seen,
     share: totalClicks ? stat.clicks / totalClicks : 0,
     per100: seen !== null && seenVisits > 0 ? (100 * stat.clicks) / seenVisits : null,
+    conversion,
   };
 }
 
 export function metricValue(n: AreaNumbers, metric: AreaMetric): number | null {
-  return metric === "seen" ? n.seen : metric === "share" ? n.share : n.per100;
+  return metric === "seen" ? n.seen : metric === "share" ? n.share : metric === "per100" ? n.per100 : n.conversion;
+}
+
+// ── Conversions ──────────────────────────────────────────────────────────────
+
+/** Map element index → visits that clicked it and how many reached the goal afterwards. */
+export type ConversionMatching = Map<number, { visits: number; converted: number }>;
+
+export function matchConversions(map: SnapshotMap, rows: { xpath: string[]; visits: number; converted: number }[]): ConversionMatching {
+  const index = new Map<string, number>();
+  map.elements.forEach((e, i) => {
+    for (const k of e.keys) if (!index.has(k)) index.set(k, i);
+  });
+  const out: ConversionMatching = new Map();
+  for (const row of rows) {
+    const i = keysForXpath(row.xpath).map((k) => index.get(k)).find((v) => v !== undefined);
+    if (i === undefined) continue;
+    const cur = out.get(i) ?? { visits: 0, converted: 0 };
+    cur.visits += row.visits;
+    cur.converted += row.converted;
+    out.set(i, cur);
+  }
+  return out;
 }
 
 export function formatMetric(v: number | null, metric: AreaMetric): string {

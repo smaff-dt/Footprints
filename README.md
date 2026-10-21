@@ -60,6 +60,24 @@ contain `utm_source=newsletter`* for visits from the newsletter. A preview
 shows which pages match before saving. Groups are saved privately in
 Dynatrace and follow you across browsers.
 
+### Views on the page map
+
+| View | What it shows |
+|---|---|
+| **Areas** | Areas colored by the metric chosen in **Show**; any element can be pointed at or selected |
+| **Click heatmap** | Where visitors click, from the exact click positions recorded by Dynatrace. Only visits whose browser window was about as wide as the snapshot's (±4%) are used, since they saw the same layout; Footprints says how many clicks that is and suggests the most common width when it differs |
+| **Scroll heatmap** | The page colored by the share of visits that get down to each height (red: everyone, blue: few); point anywhere to read the share |
+
+### Conversions
+
+Choose a **Conversion goal** in the filters — a page or a page group, for
+example a group *Path contains `/checkout/`*. A visit converts when it
+reaches the goal **after** landing on the page (page average) or **after
+clicking** an element. Each element then shows the share of visits that
+clicked it and went on to reach the goal, next to the page average; areas
+get the **Conversion after a click** metric. For an area, visits that click
+several of its elements count once per element.
+
 ### Metrics
 
 | Metric | Meaning |
@@ -69,6 +87,7 @@ Dynatrace and follow you across browsers.
 | **Clicks per 100 views** | Clicks in the area for every 100 visits that saw it |
 | *(elements)* **Click rate** | Share of visits that click the element |
 | *(elements)* **Clicked by, of those who saw it** | Visits that clicked ÷ visits that saw it |
+| **Conversion after a click** | Visits that reached the goal after clicking in the area ÷ visits that clicked in it |
 
 Choose the metric from the **Show** dropdown. Dashed lines mark where 75%,
 50% and 25% of visits stop scrolling (lines that nearly coincide share one
@@ -183,7 +202,8 @@ ui/
   App.tsx                 page layout, filters, view switch, receives snapshots
   components/SnapshotPanel  snapshots of a page: list, load, rename, delete
   components/SnapshotView   the page map: metric dropdown, colored areas, any element selectable, sidebar
-  components/PagePicker   searchable page list and the page group editor
+  components/PagePicker   searchable page list and the page group editor (also used for the goal)
+  components/Heatmaps     click and scroll heatmap layers
   lib/pages.ts            pages and page groups (rules, storage)
   components/ShowOnPage   the "Show on the page" button and its fallback
   lib/snapshots.ts        snapshots as Dynatrace documents

@@ -124,18 +124,29 @@ export function validRules(rules: PageRule[]): PageRule[] {
   return rules.filter((r) => normaliseRuleValue(r) !== "" || (r.part === "query" && r.op === "is"));
 }
 
-/** Keeps the events of the chosen page, or of every page of a group. */
-function scopeFilter(scope: PageScope): string {
+/** True for events of the chosen page, or of every page of a group. */
+function scopeExpr(scope: PageScope): string {
   if (scope.kind === "page") {
     if (!scope.url) throw new Error("No page selected");
-    return `| filter fp_page == ${dqlString(scope.url)}`;
+    return `fp_page == ${dqlString(scope.url)}`;
   }
   const rules = validRules(scope.rules);
   if (rules.length === 0) throw new Error("This page group has no rule");
-  return `| filter ${rules.map(ruleExpr).join(" and ")}`;
+  return rules.length === 1 ? ruleExpr(rules[0]) : `(${rules.map(ruleExpr).join(" and ")})`;
 }
 
-const CLICKS_ONLY = `| filter characteristics.has_user_interaction == true and interaction.type == "click"`;
+/** Keeps the events of the chosen page, or of every page of a group. */
+function scopeFilter(scope: PageScope): string {
+  return `| filter ${scopeExpr(scope)}`;
+}
+
+/**
+ * Events on Footprints' own panel are left out: older versions of the
+ * extension could be recorded by the site's analytics.
+ */
+const NOT_OWN_UI = `| filter isNull(ui_element.xpath) or not(contains(toString(ui_element.xpath), "footprints-overlay-host"))`;
+
+const CLICKS_ONLY = lines(`| filter characteristics.has_user_interaction == true and interaction.type == "click"`, NOT_OWN_UI);
 
 function lines(...parts: string[]): string {
   return parts.filter(Boolean).join("\n");
@@ -223,6 +234,14 @@ const POSITION_Y = lines(
   "| fieldsAdd pos_y = coalesce(pos_y_text, pos_y_record)",
 );
 
+/** Adds `pos_x` and `pos_y`: where on the page the event happened (page coordinates, px). */
+const POSITION_XY = lines(
+  POSITION_Y,
+  String.raw`| parse arrayFirst(positions), "LD '\"x\"' SPACE? ':' SPACE? '\"'? INT:pos_x_text"`,
+  String.raw`| parse toString(positions), "LD '\"x\"' SPACE? ':' SPACE? '\"'? INT:pos_x_record"`,
+  "| fieldsAdd pos_x = coalesce(pos_x_text, pos_x_record)",
+);
+
 /** Width of one step of the scroll-depth distribution, in pixels. */
 export const SCROLL_STEP = 50;
 
@@ -249,6 +268,7 @@ export function scrollDepthQuery(f: Filters, scope: PageScope): string {
     deviceFilter(f.device),
     PAGE_FIELDS,
     scopeFilter(scope),
+    NOT_OWN_UI,
     POSITION_Y,
     "| fieldsAdd window_h = toDouble(browser.window.height), pos_y = toDouble(pos_y)",
     "| fieldsAdd page_scroll = interaction.type == \"scroll\" and (isNull(ui_element.tag_name) or ui_element.tag_name == \"html\" or ui_element.tag_name == \"body\")",
@@ -298,5 +318,92 @@ export function sectionsQuery(f: Filters, scope: PageScope, groupBy: GroupBy): s
       "tag = takeAny(ui_element.tag_name), node = takeAny(arrayLast(ui_element.xpath)), by: {section}",
     "| sort visits desc",
     "| limit 200",
+  );
+}
+
+// ── Click heatmap ────────────────────────────────────────────────────────────
+
+/** Clicks per browser window width: the layout a visitor saw depends on it. */
+export function clickWidthsQuery(f: Filters, scope: PageScope): string {
+  return lines(
+    `fetch user.events, ${fromClause(f.timeframe)}`,
+    appFilter(f.appId),
+    CLICKS_ONLY,
+    deviceFilter(f.device),
+    PAGE_FIELDS,
+    scopeFilter(scope),
+    "| summarize clicks = count(), by: {width = browser.window.width}",
+    "| sort clicks desc",
+    "| limit 100",
+  );
+}
+
+/** Size of a heatmap cell, in page pixels. */
+export const HEAT_CELL = 8;
+
+/**
+ * Where on the page clicks happened, in cells of HEAT_CELL pixels, for visits
+ * whose window was between `minWidth` and `maxWidth` pixels wide (so they saw
+ * about the same layout as the snapshot).
+ */
+export function clickPositionsQuery(f: Filters, scope: PageScope, minWidth: number, maxWidth: number): string {
+  return lines(
+    `fetch user.events, ${fromClause(f.timeframe)}`,
+    appFilter(f.appId),
+    CLICKS_ONLY,
+    deviceFilter(f.device),
+    `| filter browser.window.width >= ${Math.floor(minWidth)} and browser.window.width <= ${Math.ceil(maxWidth)}`,
+    PAGE_FIELDS,
+    scopeFilter(scope),
+    POSITION_XY,
+    "| filter isNotNull(pos_x) and isNotNull(pos_y)",
+    `| summarize clicks = count(), by: {x = bin(toDouble(pos_x), ${HEAT_CELL}), y = bin(toDouble(pos_y), ${HEAT_CELL})}`,
+    "| sort clicks desc",
+    "| limit 5000",
+  );
+}
+
+// ── Conversions ──────────────────────────────────────────────────────────────
+
+/**
+ * For each visit to the page (or group): when it first got there, when it
+ * last reached the goal, and each element it clicked with the time of the
+ * click. A visit converts when it reaches the goal after landing on the page
+ * (or, for an element, after clicking it).
+ */
+function conversionBase(f: Filters, scope: PageScope, goal: PageScope): string {
+  return lines(
+    `fetch user.events, ${fromClause(f.timeframe)}`,
+    appFilter(f.appId),
+    deviceFilter(f.device),
+    PAGE_FIELDS,
+    `| fieldsAdd fp_in = ${scopeExpr(scope)}, fp_goal = ${scopeExpr(goal)}`,
+    "| filter fp_in == true or fp_goal == true",
+    "| fieldsAdd fp_click = if(fp_in == true and characteristics.has_user_interaction == true and interaction.type == \"click\" " +
+      "and not(contains(toString(ui_element.xpath), \"footprints-overlay-host\")), toString(ui_element.xpath))",
+    "| summarize goal_at = max(if(fp_goal == true, timestamp)), landed_at = min(if(fp_in == true, timestamp)), " +
+      "clicked = arrayRemoveNulls(collectArray(if(isNotNull(fp_click), record(section = fp_click, at = timestamp)))), " +
+      "by: {session = dt.rum.session.id}",
+    "| filter isNotNull(landed_at)",
+  );
+}
+
+/** Visits to the page, and how many of them reached the goal afterwards. */
+export function pageConversionQuery(f: Filters, scope: PageScope, goal: PageScope): string {
+  return lines(
+    conversionBase(f, scope, goal),
+    "| summarize visits = count(), converted = countIf(isNotNull(goal_at) and goal_at > landed_at)",
+  );
+}
+
+/** Per clicked element: visits that clicked it, and how many reached the goal afterwards. */
+export function elementConversionQuery(f: Filters, scope: PageScope, goal: PageScope): string {
+  return lines(
+    conversionBase(f, scope, goal),
+    "| expand clicked",
+    "| summarize first_click = min(clicked[at]), goal_at = takeAny(goal_at), by: {section = clicked[section], session}",
+    "| summarize visits = count(), converted = countIf(isNotNull(goal_at) and goal_at > first_click), by: {section}",
+    "| sort visits desc",
+    "| limit 3000",
   );
 }

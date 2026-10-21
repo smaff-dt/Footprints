@@ -731,6 +731,9 @@
     }
     // Not clicked: name and outline the nearest thing a visitor could click
     // (the logo, a cart icon…), so any element can be inspected.
+    // A title or a picture is shown on its own; otherwise the nearest clickable thing.
+    const content = isContent(hit) ? hit : null;
+    if (content) return { kind: "blank", el: content };
     const clickable = hit.closest(CLICKABLE);
     if (clickable && clickable !== document.body) return { kind: "blank", el: clickable };
     const area = areaContaining(hit);
@@ -996,7 +999,15 @@
   // ── Snapshot: picture of the whole page + map of its areas and elements ───
 
   const CLICKABLE = "a[href], button, input, select, textarea, label, summary, img, [role=button], [role=link], [role=tab], [onclick], [tabindex]";
-  const MAX_ELEMENTS = 3000;
+  const MAX_ELEMENTS = 5000;
+  const CONTENT_TAGS = new Set(["img", "svg", "picture", "video", "canvas", "h1", "h2", "h3", "h4", "h5", "h6", "p", "li"]);
+
+  /** Something a visitor can see and point at: a picture, a heading, a line of text (a product title, a price). */
+  function isContent(el) {
+    if (CONTENT_TAGS.has(el.localName)) return true;
+    for (const n of el.childNodes) if (n.nodeType === 3 && n.textContent.trim().length > 1) return true;
+    return false;
+  }
   const MAX_PAGE_HEIGHT = 16000;
   const OUTPUT_WIDTH = 1440;
 
@@ -1090,6 +1101,15 @@
     };
     for (const f of state.found) add(f.el, JSON.stringify(f.row.xpath));
     for (const el of document.querySelectorAll(CLICKABLE)) add(el, null);
+    // Texts and pictures too, clicked or not, so any of them can be selected in Footprints.
+    for (const el of document.body.querySelectorAll("*")) {
+      if (elements.length >= MAX_ELEMENTS) break;
+      if (el.closest("svg") !== el && el.closest("svg")) continue; // parts of an icon
+      if (!isContent(el)) continue;
+      const cs = getComputedStyle(el);
+      if (cs.visibility === "hidden" || cs.display === "none" || Number(cs.opacity) === 0) continue;
+      add(el, null);
+    }
     uniqueNames(areas.map((a) => [a, areaName(a._el, ctx, false)]));
     areas.forEach((a) => delete a._el);
     return {

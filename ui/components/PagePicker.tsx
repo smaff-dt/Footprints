@@ -22,6 +22,11 @@ export function PagePicker(props: {
   onChange: (choice: PageChoice) => void;
   onNewGroup: () => void;
   onEditGroup: (group: PageGroup) => void;
+  label?: string;
+  /** Offers an empty choice with this text (e.g. "No goal"). */
+  noneLabel?: string;
+  onClear?: () => void;
+  placeholder?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -81,7 +86,7 @@ export function PagePicker(props: {
 
   return (
     <div ref={boxRef} style={{ position: "relative", display: "flex", flexDirection: "column", gap: 6, flex: "1 1 340px", minWidth: 0 }}>
-      <span style={{ fontSize: 13, fontWeight: 600, color: c.muted }}>Page</span>
+      <span style={{ fontSize: 13, fontWeight: 600, color: c.muted }}>{props.label ?? "Page"}</span>
       <button
         type="button"
         aria-haspopup="listbox"
@@ -104,7 +109,7 @@ export function PagePicker(props: {
         }}
       >
         <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {props.current ? describe(props.current) : props.loading ? "Loading pages…" : "Choose a page"}
+          {props.current ? describe(props.current) : props.loading ? "Loading pages…" : props.placeholder ?? "Choose a page"}
         </span>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
           <path d="m6 9 6 6 6-6" />
@@ -163,6 +168,20 @@ export function PagePicker(props: {
             {remote?.error && " The search failed: showing listed pages only."}
           </div>
           <div role="listbox" aria-label="Pages" style={{ overflow: "auto", maxHeight: 420, display: "flex", flexDirection: "column", gap: 2 }}>
+            {props.noneLabel && props.onClear && !q && (
+              <button
+                type="button"
+                role="option"
+                aria-selected={!props.current}
+                onClick={() => {
+                  props.onClear!();
+                  setOpen(false);
+                }}
+                style={{ minHeight: 38, padding: "0 10px", border: 0, borderRadius: 8, background: !props.current ? c.accentSoft : "transparent", color: c.ink, textAlign: "left", cursor: "pointer", fontStyle: "italic" }}
+              >
+                {props.noneLabel}
+              </button>
+            )}
             {groups.length > 0 && <Heading>Your page groups</Heading>}
             {groups.map((ch) => (
               <Row key={ch.key} choice={ch} selected={ch.key === props.value} onPick={pick} onEdit={() => ch.group && (setOpen(false), props.onEditGroup(ch.group))} />
