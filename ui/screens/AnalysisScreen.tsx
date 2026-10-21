@@ -78,6 +78,7 @@ export function AnalysisScreen(props: {
         if (!alive) return;
         setMeta(m);
         setSnapshot(s);
+        latest.current = { meta: m, snapshot: s };
       },
       (e: unknown) => alive && setLoadError(e instanceof Error ? e.message : String(e)),
     );
@@ -116,29 +117,57 @@ export function AnalysisScreen(props: {
     [countKey],
   );
 
-  // Zoning: shown at once, saved a moment later (several quick changes make one save).
+  // Zoning: shown at once, saved a moment later. Saves go one at a time,
+  // each from the document's latest version; if Dynatrace reports a newer
+  // version (a conflict), it is read again and the save retried once.
   const saveTimer = useRef<number | null>(null);
   const latest = useRef<{ meta: SnapshotMeta | null; snapshot: Snapshot | null }>({ meta: null, snapshot: null });
-  latest.current = { meta, snapshot };
+  const inFlight = useRef(false);
+  const dirty = useRef(false);
+  useEffect(() => {
+    latest.current.meta = meta;
+  }, [meta?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function flush() {
+    if (inFlight.current) {
+      dirty.current = true;
+      return;
+    }
+    inFlight.current = true;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      do {
+        dirty.current = false;
+        const { meta: m, snapshot: s } = latest.current;
+        if (!m || !s) break;
+        let version: string;
+        try {
+          version = await saveZoning(m, s, s.zoning?.zones ?? [], s.names);
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e);
+          if (!/409|version/i.test(message)) throw e;
+          const fresh = await getSnapshotMeta(m.id);
+          version = await saveZoning(fresh, s, s.zoning?.zones ?? [], s.names);
+        }
+        latest.current.meta = { ...m, version };
+        setMeta(latest.current.meta);
+      } while (dirty.current);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      inFlight.current = false;
+      setSaving(false);
+    }
+  }
+
   function onZoning(zones: string[], names: Record<string, string>) {
     if (!snapshot) return;
     const next = { ...snapshot, zoning: { zones }, names };
     setSnapshot(next);
+    latest.current.snapshot = next;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
-    saveTimer.current = window.setTimeout(async () => {
-      const { meta: m, snapshot: s } = latest.current;
-      if (!m || !s) return;
-      setSaving(true);
-      setSaveError(null);
-      try {
-        const version = await saveZoning(m, s, s.zoning?.zones ?? [], s.names);
-        setMeta((cur) => (cur ? { ...cur, version } : cur));
-      } catch (e) {
-        setSaveError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setSaving(false);
-      }
-    }, 800);
+    saveTimer.current = window.setTimeout(flush, 600);
   }
 
   async function remove() {

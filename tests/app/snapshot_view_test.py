@@ -54,7 +54,7 @@ with sync_playwright() as p:
     pg.mouse.move(t["x"], t["y"]); pg.wait_for_timeout(100)
     print("2. pointing outlines a block:", pg.inner_text("[role=tooltip]").replace("\n", " · "))
     pg.mouse.click(t["x"], t["y"]); pg.wait_for_timeout(200)
-    print("3. click turns it on:", pg.locator("[data-zone]").count(), "zone | label:", pg.locator("[data-zone] button").first.inner_text())
+    print("3. click turns it on:", pg.locator("[data-zone]").count(), "zone | label:", pg.locator("[data-zone] button").first.inner_text(), "| metric:", pg.eval_on_selector("select", "s => s.options[s.selectedIndex].text"))
     card = pg.inner_text("[aria-label='Selected zone']").replace("\n", " · ")
     print("   card:", card[:260])
     print("   exact visits asked for:", window_counted := pg.evaluate("window.counted.length"))
@@ -70,6 +70,13 @@ with sync_playwright() as p:
 
     pg.click("text=Suggest zones"); pg.wait_for_timeout(300)
     print("6. suggested:", pg.inner_text("[role=status]")[:200], "| zones on:", pg.locator("[data-zone]").count())
+    # Picking a larger block that holds another zone turns that zone off: zones never overlap.
+    pg.locator("[data-zone] button:has-text('%')").nth(1).click(); pg.wait_for_timeout(150)
+    pg.locator("[aria-label='Selected zone'] button:has-text('Hot products (10 items)')").click(); pg.wait_for_timeout(200)
+    print("   larger block over two zones:", pg.locator("[data-zone]").count(), "zones on |", pg.inner_text("[role=status] >> nth=-1"))
+    # Suggest again: replaces what was on.
+    pg.click("text=Suggest zones"); pg.wait_for_timeout(300)
+    print("   suggest replaces the zones that were on:", pg.locator("[data-zone]").count(), "zones on")
     pg.select_option("select", "conversion"); pg.wait_for_timeout(300)
     print("   conversion labels:", pg.locator("[data-zone] button").all_inner_texts())
     pg.click("text=Zone list")

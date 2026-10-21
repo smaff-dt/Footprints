@@ -127,9 +127,9 @@ export function SnapshotView(props: {
     return out;
   }, [matching, tree]);
 
-  const [metric, setMetric] = usePersistentState<ZoneMetric>("fp.zoneMetric", "share");
+  const [metric, setMetric] = usePersistentState<ZoneMetric>("fp.zoneMetric2", "rate");
   const metricOptions = ZONE_METRICS.filter((m) => (hasScroll || !m.needsScroll) && (goal || !m.needsGoal));
-  const activeMetric: ZoneMetric = metricOptions.some((m) => m.value === metric) ? metric : "share";
+  const activeMetric: ZoneMetric = metricOptions.some((m) => m.value === metric) ? metric : metricOptions[0].value;
   const [showLines, setShowLines] = useState(true);
   const [listOpen, setListOpen] = usePersistentState("fp.zoneList", false);
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
@@ -137,6 +137,7 @@ export function SnapshotView(props: {
   const [selected, setSelected] = useState<number | null>(null);
   const [preview, setPreview] = useState<number | null>(null);
   const [suggestNote, setSuggestNote] = useState<string | null>(null);
+  const [overlapNote, setOverlapNote] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const canvasRef = useRef<HTMLDivElement>(null);
 
@@ -195,19 +196,30 @@ export function SnapshotView(props: {
   function setZones(next: number[], names = props.names) {
     props.onZoning(Array.from(new Set(next.map(pathOf).filter(Boolean))), names);
   }
+  /** Zones never overlap: turning one on turns off any zone it touches (inside, around or across it). */
+  function overlaps(a: number, b: number): boolean {
+    const p = map.elements[a].box;
+    const q = map.elements[b].box;
+    const w = Math.min(p.x + p.w, q.x + q.w) - Math.max(p.x, q.x);
+    const h = Math.min(p.y + p.h, q.y + q.h) - Math.max(p.y, q.y);
+    return w > 2 && h > 2;
+  }
+  function turnOn(i: number, also: number[] = []) {
+    const gone = zoneIdx.filter((z) => z !== i && !also.includes(z) && overlaps(z, i));
+    setZones([...zoneIdx.filter((z) => !gone.includes(z) && !also.includes(z)), i]);
+    setSelected(i);
+    setOverlapNote(gone.length ? `${gone.map(nameOf).join(", ")} turned off: zones cannot overlap.` : null);
+  }
   function toggle(i: number) {
     if (zoneSet.has(i)) {
       setZones(zoneIdx.filter((z) => z !== i));
       if (selected === i) setSelected(null);
-    } else {
-      setZones([...zoneIdx, i]);
-      setSelected(i);
-    }
+      setOverlapNote(null);
+    } else turnOn(i);
   }
   function replaceZone(from: number, to: number) {
     if (from === to) return;
-    setZones([...zoneIdx.filter((z) => z !== from && z !== to), to]);
-    setSelected(to);
+    turnOn(to, [from]);
     setPreview(null);
   }
   function rename(i: number, name: string) {
@@ -219,16 +231,24 @@ export function SnapshotView(props: {
       setSuggestNote("No clicks recorded on this page in the period: nothing to suggest yet.");
       return;
     }
-    setZones(Array.from(new Set([...zoneIdx, ...picked])));
+    // The suggestion replaces the zones that were on.
+    setZones(picked);
+    setSelected(null);
+    setOverlapNote(null);
     const share = picked.reduce((s, i) => s + inside[i].clicks, 0) / Math.max(1, matching.totalClicks);
     setSuggestNote(`These ${picked.length} zones get ${formatShare(share)} of the page's clicks: ${picked.map((i) => nameOf(i)).join(", ")}.`);
   }
 
-  /** The smallest block under the pointer. */
+  /**
+   * What a click would act on: a zone that is on, if the pointer is in one
+   * (a click turns it off); otherwise the smallest block under the pointer.
+   */
   function blockAt(e: MouseEvent<HTMLDivElement>): number | null {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * W;
     const y = ((e.clientY - rect.top) / rect.height) * H;
+    const onZone = zoneIdx.filter((i) => contains(map.elements[i].box, x, y)).sort((a, b) => map.elements[a].box.w * map.elements[a].box.h - map.elements[b].box.w * map.elements[b].box.h)[0];
+    if (onZone !== undefined) return onZone;
     let best = -1;
     let bestSize = Infinity;
     map.elements.forEach((el, i) => {
@@ -400,6 +420,14 @@ export function SnapshotView(props: {
           </button>
         </div>
       )}
+      {mode === "zones" && overlapNote && (
+        <div role="status" style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", padding: "8px 12px", borderRadius: 10, background: c.surfaceAlt, fontSize: 14 }}>
+          <span>{overlapNote}</span>
+          <button type="button" onClick={() => setOverlapNote(null)} aria-label="Dismiss" style={{ ...pillButton, minHeight: 30 }}>
+            OK
+          </button>
+        </div>
+      )}
       {mode === "clicks" && heat && (
         <div style={{ fontSize: 13, color: c.muted }}>
           {heat.loading
@@ -429,7 +457,7 @@ export function SnapshotView(props: {
           goalLabel={goal?.label ?? null}
           nameOf={nameOf}
           onShow={(i) => {
-            if (!zoneSet.has(i)) setZones([...zoneIdx, i]);
+            if (!zoneSet.has(i)) turnOn(i);
             props.onMode?.("zones");
             window.setTimeout(() => setSelected(i), 0);
           }}

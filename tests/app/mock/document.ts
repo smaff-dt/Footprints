@@ -45,8 +45,12 @@ export const documentsClient = {
     window.__docs.unshift(d);
     return meta(d);
   },
-  async updateDocumentContent(config: { id: string; body: { content: Blob } }) {
+  async updateDocumentContent(config: { id: string; optimisticLockingVersion: string; body: { content: Blob } }) {
     const d = window.__docs.find((x) => x.id === config.id)!;
+    await new Promise((r) => setTimeout(r, 150)); // a save takes a moment, like the real one
+    if (config.optimisticLockingVersion !== d.version) {
+      throw new Error(`Request failed: {"error":{"code":409,"message":"Expected to find document ${d.id} with version ${config.optimisticLockingVersion} but actual version is ${d.version}"}}`);
+    }
     d.content = await read(config.body.content);
     d.version = String(Number(d.version) + 1);
     return meta(d);

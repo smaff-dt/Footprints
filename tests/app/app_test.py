@@ -63,6 +63,16 @@ with sync_playwright() as p:
     print("3. analysis screen:", pg.inner_text("h1"), "|", pg.locator("h1 + p").inner_text())
     print("   filters:", [t.split("\n")[0] for t in pg.locator("section[aria-label=Filters] label, section[aria-label=Filters] span").all_inner_texts()][:4])
     print("   device filter gone:", pg.locator("text=Tablet").count() == 0)
+    # Turn zones on and off quickly, several times: every change is saved, none is refused.
+    img = pg.locator("img").first.bounding_box()
+    for k in range(6):
+        pg.mouse.click(img["x"] + 60 + 40 * (k % 3), img["y"] + 120 + 10 * k)
+        pg.wait_for_timeout(250 if k % 2 else 700)
+    pg.wait_for_timeout(2500)
+    saved = pg.evaluate("window.__docs.find(d => d.id === 'doc-0').content.zoning")
+    shown = pg.locator("[data-zone]").count()
+    print("   quick clicks: error shown:", pg.locator("text=Could not save").count() > 0, "| zones on:", shown, "| saved:", len(saved["zones"]) if saved else None,
+          "| version:", pg.evaluate("window.__docs.find(d => d.id === 'doc-0').version"))
     pg.click("text=‹ All snapshots")
     pg.wait_for_selector("text=Your snapshots")
     print("4. back to the list: OK")

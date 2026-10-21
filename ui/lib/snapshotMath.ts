@@ -429,8 +429,8 @@ export function insideTotals(map: SnapshotMap, tree: ZoneTree, matching: Matchin
 export type ZoneMetric = "exposure" | "share" | "rate" | "conversion";
 
 export const ZONE_METRICS: { value: ZoneMetric; label: string; help: string; needsScroll?: boolean; needsGoal?: boolean }[] = [
-  { value: "share", label: "Click share", help: "Of all the clicks on the page, the share that happens in this zone." },
   { value: "rate", label: "Click rate", help: "Of the visits that saw the zone, the share that clicked in it.", needsScroll: true },
+  { value: "share", label: "Click share", help: "Of all the clicks on the page, the share that happens in this zone." },
   { value: "exposure", label: "Exposure", help: "The share of visits that scrolled far enough to see the zone.", needsScroll: true },
   { value: "conversion", label: "Conversion", help: "Of the visits that clicked in the zone, the share that then reached the conversion goal.", needsGoal: true },
 ];
@@ -506,7 +506,13 @@ export function suggestZones(map: SnapshotMap, tree: ZoneTree, inside: Inside[],
     .filter((c) => c.clicks > 0 && c.a >= page * 0.003 && c.a <= page * 0.35)
     .sort((x, y) => y.clicks - x.clicks || y.a - x.a);
   const picked: number[] = [];
+  const overlap = (a: number, b: number) => {
+    const p = map.elements[a].box;
+    const q = map.elements[b].box;
+    return Math.min(p.x + p.w, q.x + q.w) - Math.max(p.x, q.x) > 2 && Math.min(p.y + p.h, q.y + q.h) - Math.max(p.y, q.y) > 2;
+  };
   const related = (a: number, b: number) => {
+    if (overlap(a, b)) return true;
     for (let j = tree.parent[a]; j >= 0; j = tree.parent[j]) if (j === b) return true;
     for (let j = tree.parent[b]; j >= 0; j = tree.parent[j]) if (j === a) return true;
     return false;
