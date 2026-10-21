@@ -409,3 +409,42 @@ export function elementConversionQuery(f: Filters, scope: PageScope, goal: PageS
     "| limit 3000",
   );
 }
+
+// ── One zone ─────────────────────────────────────────────────────────────────
+
+/** Most recorded elements a zone question carries; beyond that the numbers are estimated. */
+export const ZONE_MAX_ELEMENTS = 400;
+
+/**
+ * Visits that clicked anywhere in a zone (any of the recorded elements in
+ * `sections`, as Dynatrace prints them), and — with a goal — how many of them
+ * reached it after their first click there.
+ */
+export function zoneQuery(f: Filters, scope: PageScope, goal: PageScope | null, sections: string[]): string {
+  const list = `array(${sections.map(dqlString).join(", ")})`;
+  if (!goal) {
+    return lines(
+      `fetch user.events, ${fromClause(f.timeframe)}`,
+      appFilter(f.appId),
+      CLICKS_ONLY,
+      deviceFilter(f.device),
+      PAGE_FIELDS,
+      scopeFilter(scope),
+      `| filter in(toString(ui_element.xpath), ${list})`,
+      "| summarize visits = countDistinct(dt.rum.session.id)",
+    );
+  }
+  return lines(
+    `fetch user.events, ${fromClause(f.timeframe)}`,
+    appFilter(f.appId),
+    deviceFilter(f.device),
+    PAGE_FIELDS,
+    `| fieldsAdd fp_in = ${scopeExpr(scope)}, fp_goal = ${scopeExpr(goal)}`,
+    "| filter fp_in == true or fp_goal == true",
+    "| fieldsAdd fp_at = coalesce(start_time, timestamp)",
+    `| fieldsAdd fp_click_at = if(fp_in == true and interaction.type == "click" and in(toString(ui_element.xpath), ${list}), fp_at)`,
+    "| summarize goal_at = max(if(fp_goal == true, fp_at)), first_click = min(fp_click_at), by: {session = dt.rum.session.id}",
+    "| filter isNotNull(first_click)",
+    "| summarize visits = count(), converted = countIf(isNotNull(goal_at) and goal_at > first_click)",
+  );
+}

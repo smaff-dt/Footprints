@@ -140,6 +140,8 @@ export interface PageElement {
   clicks: number;
   visits: number;
   label: string;
+  /** The xpath exactly as Dynatrace prints it, to ask about this element again. */
+  raw?: string;
 }
 
 /** Every clicked element of a page, for drawing on the live page. */
@@ -167,6 +169,7 @@ function mapPageElements(rows: Row[]): PageElement[] {
     if (!Array.isArray(xpath) || xpath.length === 0) continue;
     out.push({
       xpath: xpath.map(String),
+      raw: str(r["section"]),
       clicks: num(r["clicks"]),
       visits: num(r["visits"]),
       label: elementLabel(str(r["name"]), str(r["node"]), str(r["tag"])),

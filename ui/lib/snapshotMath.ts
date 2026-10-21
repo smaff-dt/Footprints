@@ -59,6 +59,8 @@ export interface MatchedElement {
 
 export interface Matching {
   byElement: Map<number, MatchedElement>;
+  /** The recorded rows that landed on each element. */
+  rowsByElement: Map<number, PageElement[]>;
   matchedClicks: number;
   totalClicks: number;
 }
@@ -69,6 +71,7 @@ export function matchClicks(map: SnapshotMap, rows: PageElement[]): Matching {
     for (const k of e.keys) if (!index.has(k)) index.set(k, i);
   });
   const byElement = new Map<number, MatchedElement>();
+  const rowsByElement = new Map<number, PageElement[]>();
   let matchedClicks = 0;
   let totalClicks = 0;
   for (const row of rows) {
@@ -81,8 +84,9 @@ export function matchClicks(map: SnapshotMap, rows: PageElement[]): Matching {
     // Visits of several recorded rows on one element can overlap: keep the largest.
     cur.visits = Math.max(cur.visits, row.visits);
     byElement.set(i, cur);
+    rowsByElement.set(i, [...(rowsByElement.get(i) ?? []), row]);
   }
-  return { byElement, matchedClicks, totalClicks };
+  return { byElement, rowsByElement, matchedClicks, totalClicks };
 }
 
 // ── Areas at a detail level ──────────────────────────────────────────────────
@@ -347,4 +351,170 @@ export function layoutsOf(snapshot: { viewport: { w: number }; map: SnapshotMap;
   };
   const measured = (snapshot.layouts ?? []).filter((l) => Math.abs(l.width - own.width) > 1);
   return [own, ...measured];
+}
+
+// ── Zones: any block of the page ─────────────────────────────────────────────
+
+export interface ZoneTree {
+  /** Each element's full structural path ("html[1]/body[1]/…"), when known. */
+  paths: (string | null)[];
+  /** The nearest element of the map that contains it, or -1. */
+  parent: number[];
+}
+
+/** What contains what, from the structural paths of the map's elements. */
+export function zoneTree(map: SnapshotMap): ZoneTree {
+  const paths = map.elements.map((e) => e.keys.find((k) => k.startsWith("html[1]/")) ?? null);
+  const byPath = new Map<string, number>();
+  paths.forEach((p, i) => p && !byPath.has(p) && byPath.set(p, i));
+  const parent = paths.map((p) => {
+    if (!p) return -1;
+    let q = p;
+    for (;;) {
+      const cut = q.lastIndexOf("/");
+      if (cut <= 0) return -1;
+      q = q.slice(0, cut);
+      const i = byPath.get(q);
+      if (i !== undefined) return i;
+    }
+  });
+  return { paths, parent };
+}
+
+function sameBoxish(a: Box, b: Box): boolean {
+  return Math.abs(a.x - b.x) < 6 && Math.abs(a.y - b.y) < 6 && Math.abs(a.w - b.w) < 6 && Math.abs(a.h - b.h) < 6;
+}
+
+/**
+ * The blocks around element i, from i itself to the largest: wrappers exactly
+ * as big as the block before them are skipped, and so is anything covering
+ * (nearly) the whole page.
+ */
+export function chainOf(map: SnapshotMap, tree: ZoneTree, i: number): number[] {
+  const page = map.page.w * map.page.h;
+  const out = [i];
+  for (let j = tree.parent[i]; j >= 0; j = tree.parent[j]) {
+    const b = map.elements[j].box;
+    if (b.w * b.h >= page * 0.92) break;
+    if (sameBoxish(b, map.elements[out[out.length - 1]].box)) continue;
+    out.push(j);
+  }
+  return out;
+}
+
+export interface Inside {
+  clicks: number;
+  /** Recorded rows on it or inside it. */
+  rows: PageElement[];
+  /** The most visits on any one of those rows: a lower bound of the visits that clicked in it. */
+  visitsAtLeast: number;
+}
+
+/** Clicks on each element or anything inside it. */
+export function insideTotals(map: SnapshotMap, tree: ZoneTree, matching: Matching): Inside[] {
+  const out: Inside[] = map.elements.map(() => ({ clicks: 0, rows: [], visitsAtLeast: 0 }));
+  for (const [i, rows] of matching.rowsByElement) {
+    for (let j = i; j >= 0; j = tree.parent[j]) {
+      const t = out[j];
+      for (const r of rows) {
+        t.clicks += r.clicks;
+        t.rows.push(r);
+        t.visitsAtLeast = Math.max(t.visitsAtLeast, r.visits);
+      }
+    }
+  }
+  return out;
+}
+
+export type ZoneMetric = "exposure" | "share" | "rate" | "conversion";
+
+export const ZONE_METRICS: { value: ZoneMetric; label: string; help: string; needsScroll?: boolean; needsGoal?: boolean }[] = [
+  { value: "share", label: "Click share", help: "Of all the clicks on the page, the share that happens in this zone." },
+  { value: "rate", label: "Click rate", help: "Of the visits that saw the zone, the share that clicked in it.", needsScroll: true },
+  { value: "exposure", label: "Exposure", help: "The share of visits that scrolled far enough to see the zone.", needsScroll: true },
+  { value: "conversion", label: "Conversion", help: "Of the visits that clicked in the zone, the share that then reached the conversion goal.", needsGoal: true },
+];
+
+export interface ZoneNumbers {
+  clicks: number;
+  share: number;
+  exposure: number | null;
+  /** Visits that clicked in it; `exact` when Dynatrace counted them, else a lower bound. */
+  visits: number;
+  exact: boolean;
+  rate: number | null;
+  conversion: number | null;
+}
+
+export function zoneNumbers(
+  box: Box,
+  inside: Inside,
+  totalClicks: number,
+  pageVisits: number,
+  scroll: ScrollDepth | null,
+  counted: { visits: number; converted: number | null } | null,
+  conversions: ConversionMatching | null,
+  indexesInside: number[],
+): ZoneNumbers {
+  const exposure = exposureOf(scroll, box);
+  const visits = counted ? counted.visits : inside.visitsAtLeast;
+  const seenVisits = exposure !== null ? exposure * pageVisits : pageVisits;
+  let conversion: number | null = null;
+  if (counted && counted.converted !== null) conversion = visits > 0 ? counted.converted / visits : null;
+  else if (conversions) {
+    let v = 0;
+    let c = 0;
+    for (const i of indexesInside) {
+      const x = conversions.get(i);
+      if (x) {
+        v += x.visits;
+        c += x.converted;
+      }
+    }
+    conversion = v > 0 ? c / v : null;
+  }
+  return {
+    clicks: inside.clicks,
+    share: totalClicks ? inside.clicks / totalClicks : 0,
+    exposure,
+    visits,
+    exact: !!counted,
+    rate: seenVisits > 0 ? Math.min(1, visits / seenVisits) : null,
+    conversion,
+  };
+}
+
+export function zoneValue(n: ZoneNumbers, metric: ZoneMetric): number | null {
+  return metric === "share" ? n.share : metric === "rate" ? n.rate : metric === "exposure" ? n.exposure : n.conversion;
+}
+
+export function formatShare(v: number | null): string {
+  if (v === null) return "–";
+  const pct = v * 100;
+  if (pct > 0 && pct < 0.1) return "<0.1%";
+  return `${pct.toFixed(pct >= 10 || pct === 0 ? 0 : 1)}%`;
+}
+
+/**
+ * Two or three zones that take the most clicks: blocks between 0.3% and 35%
+ * of the page, none inside another.
+ */
+export function suggestZones(map: SnapshotMap, tree: ZoneTree, inside: Inside[], count = 3): number[] {
+  const page = map.page.w * map.page.h;
+  const candidates = map.elements
+    .map((e, i) => ({ i, a: e.box.w * e.box.h, clicks: inside[i].clicks }))
+    .filter((c) => c.clicks > 0 && c.a >= page * 0.003 && c.a <= page * 0.35)
+    .sort((x, y) => y.clicks - x.clicks || y.a - x.a);
+  const picked: number[] = [];
+  const related = (a: number, b: number) => {
+    for (let j = tree.parent[a]; j >= 0; j = tree.parent[j]) if (j === b) return true;
+    for (let j = tree.parent[b]; j >= 0; j = tree.parent[j]) if (j === a) return true;
+    return false;
+  };
+  for (const c of candidates) {
+    if (picked.length >= count) break;
+    if (picked.some((p) => p === c.i || related(p, c.i))) continue;
+    picked.push(c.i);
+  }
+  return picked;
 }

@@ -49,9 +49,9 @@ with sync_playwright() as p:
         tab.wait_for_timeout(200)
     print("3. panel runs in an isolated extension frame:", bool(panel and panel.query_selector(".primary")))
 
-    panel.click("[data-act=metric][data-value=seen]")
+    panel.click("[data-act=collapse]")
     tab.wait_for_timeout(300)
-    panel.click("[data-act=metric][data-value=share]")
+    panel.click("[data-act=expand]")
     tab.wait_for_timeout(300)
     print("4. clicks on the panel seen by the page's scripts:", tab.evaluate("window.pageClicks"))
 

@@ -69,6 +69,8 @@ export interface Snapshot {
   layouts?: Layout[];
   /** "auto" for desktop and mobile snapshots taken in the background; "custom" otherwise. */
   capture?: "auto" | "custom";
+  /** The zones turned on (structural paths of blocks of the map), saved with the snapshot. */
+  zoning?: { zones: string[] };
 }
 
 export interface Layout {
@@ -217,9 +219,9 @@ export async function loadSnapshot(id: string): Promise<Snapshot> {
   return { ...data, names: data.names ?? {} };
 }
 
-/** Saves the names given to areas; returns the document's new version. */
-export async function saveNames(meta: SnapshotMeta, snapshot: Snapshot, names: Record<string, string>): Promise<string> {
-  const next: Snapshot = { ...snapshot, names };
+/** Saves the zoning and the names given to zones; returns the document's new version. */
+export async function saveZoning(meta: SnapshotMeta, snapshot: Snapshot, zones: string[], names: Record<string, string>): Promise<string> {
+  const next: Snapshot = { ...snapshot, zoning: { zones }, names };
   const res = await documentsClient.updateDocumentContent({
     id: meta.id,
     optimisticLockingVersion: meta.version,

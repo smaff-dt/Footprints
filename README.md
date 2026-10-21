@@ -45,27 +45,20 @@ debugging interface to load the page at a given width without touching your
 window. The background tab closes by itself. It is shown at 100% zoom even
 if you zoomed the site in Chrome (your own zoom is left as it is).
 
-1. **In Footprints**, choose an application and a page (or a page group),
-   then click **Show on the page**.
-2. **On the page** that opens, the extension divides the page into areas
-   automatically and shows on each one its share of clicks or how many visits
-   see it. When the division looks right (use the **Detail** slider if
-   needed), click **Save snapshot to Footprints**.
-3. **Back in Footprints**, the snapshot appears under **Page map**: the
-   picture of the page with its areas colored by the metric you choose at the
-   top. Point at anything on the picture — an area, or any element such as
-   the logo or the cart icon, clicked or not — for its numbers; click to keep
-   it selected in the sidebar. The sidebar also ranks the areas and lets you
-   **rename** them.
+**Open the page** opens the live page with a small Footprints panel: get the
+page ready as visitors see it (close the cookie banner, open a menu, resize
+the window), then click **Save snapshot to Footprints**. The live page only
+prepares the snapshot; zones, heatmaps and numbers are in the app.
 
-A snapshot stores the picture and a map of the page (where every area and
-clickable element is), not the numbers: those are recomputed for whatever
+A snapshot stores the picture and a map of the page (where every visible
+block is — texts, pictures, links and the boxes around them — and which
+contains which), not the numbers: those are recomputed for whatever
 period and device you choose. A snapshot taken today stays useful until the
 page changes; Footprints shows how many of the period's clicks it finds on the
 snapshot, and suggests a new one when that share drops.
 
-Snapshots are Dynatrace documents, private to you by default. Names given to
-areas are saved in the snapshot. A snapshot shows one kind of page — desktop,
+Snapshots are Dynatrace documents, private to you by default. The zones you
+turn on and their names are saved in the snapshot. A snapshot shows one kind of page — desktop,
 tablet or mobile, from the window width when it was taken — and its numbers
 always come from visits on that kind of device.
 
@@ -90,46 +83,36 @@ Dynatrace and follow you across browsers.
 
 | View | What it shows |
 |---|---|
-| **Zones** | Zones colored by the metric chosen in **Show**; click a zone to select it and read its numbers, click again to deselect. **Zone list** opens the ranking, where zones can be hidden or renamed |
-| **Elements** | Any element of the page — a logo, a title, a price — clicked or not: point at it for its numbers, click to select it |
+| **Zones** | The page opens with no zone. Point at it: the block under the pointer is outlined — any block of the page, clicked or not. Click it to turn it into a zone: it stays on and shows the metric chosen in **Show**; click it again to turn it off. The zone's card lists the blocks around it, from the smallest to the largest (wrappers exactly as big as the block they hold are skipped), to pick the right one; pointing at a level outlines it first. **Suggest zones** turns on the 2–3 zones that get the most clicks. **Zone list** ranks the zones that are on, to rename or turn off |
 | **Click heatmap** | Where visitors click, from the click positions recorded by Dynatrace. A position belongs to the layout the visitor saw, which depends on the window width; each click is moved onto the same element of the snapshot, at the same spot within it (30% from its left, 60% from its top…) when the page was measured at that width, or estimated from how the element's clicks are spread otherwise. Footprints says how many clicks were placed exactly |
 | **Scroll heatmap** | The page colored by the share of visits that get down to each height (red: everyone, blue: few); point anywhere to read the share |
+| **Table** | The clicked elements, sortable by clicks, click share, visits, click rate, exposure or conversion; **Show** turns one into a zone on the picture |
 
-Heatmaps are read through their colors: zones and elements cannot be selected on them.
+Heatmaps are read through their colors: nothing to select on them.
 
 ### Conversions
 
 Choose a **Conversion goal** in the filters — a page or a page group, for
 example a group *Path contains `/checkout/`*. A visit converts when it
 reaches the goal **after** landing on the page (page average) or **after
-clicking** an element. Each element then shows the share of visits that
-clicked it and went on to reach the goal, next to the page average; areas
-get the **Conversion after a click** metric. For an area, visits that click
-several of its elements count once per element.
+clicking** in a zone. Each zone then shows the share of visits that clicked
+in it and went on to reach the goal, next to the page average.
 
 ### Metrics
 
 | Metric | Meaning |
 |---|---|
-| **Seen by** | Share of visits that scrolled far enough to see the area |
-| **Share of clicks** | Share of the page's clicks that happen in the area |
-| **Clicks per 100 views** | Clicks in the area for every 100 visits that saw it |
-| *(elements)* **Click rate** | Share of visits that click the element |
-| *(elements)* **Clicked by, of those who saw it** | Visits that clicked ÷ visits that saw it |
-| **Conversion after a click** | Visits that reached the goal after clicking in the area ÷ visits that clicked in it |
+| **Click share** | Of all the clicks on the page, the share that happens in the zone |
+| **Click rate** | Of the visits that saw the zone, the share that clicked in it |
+| **Exposure** | The share of visits that scrolled far enough to see the zone |
+| **Conversion** | Of the visits that clicked in the zone, the share that then reached the conversion goal |
 
-Choose the metric from the **Show** dropdown. Dashed lines mark where 75%,
-50% and 25% of visits stop scrolling (lines that nearly coincide share one
-label).
-
-### How areas are found
-
-The extension looks at the page itself: landmarks (header, navigation,
-footer, main content), named components (`app-login-form`), and large visual
-blocks such as banners, cards and lists. Each area gets a name from the page
-(its heading, label or role); you can rename it. The **Detail** slider goes
-from a few large areas to many small ones; the page opens at the first level
-where no single area takes more than 75% of the clicks.
+The visits that clicked in a zone are counted by Dynatrace when the zone is
+turned on (one small query per zone), so a visit that clicks several elements
+of a zone counts once. Until the answer arrives, or for zones holding more
+than 400 different clicked elements, the card shows an estimate (≈). The
+**i** next to the metric explains it. Dashed lines mark where 75%, 50% and 25%
+of visits stop scrolling.
 
 ### How exposure is measured
 
@@ -160,14 +143,6 @@ like any other visit.
 
 After updating the repository, click the reload icon on the Footprints card,
 then reload the Footprints tab.
-
-## The list view
-
-**List** ranks the page's sections (or individual elements) by share of
-visits that click, number of clicks or visits that click, with a
-plain-language summary of the selected one. Sections there come from
-component names (`app-login-form` → "Login form") and work best on sites
-built with components; the page map works on any site.
 
 ## Roadmap
 
@@ -271,13 +246,12 @@ Headless Chromium tests (Python Playwright):
 
 ```bash
 python3 tests/overlay/run.py             # finds elements (both xpath spellings), areas at each detail level
-python3 tests/overlay/inspect_test.py    # numbers on hover, page keeps working, scrolling works
-python3 tests/overlay/exposure_test.py   # exposure from a known scroll distribution
-python3 tests/overlay/autodetail_test.py # pictures named from their card; sensible starting detail
 python3 tests/overlay/e2e.py             # real extension: app → page → isolated panel → snapshot back to the app
 python3 tests/overlay/capture_test.py    # long page with sticky header and cookie bar stitched cleanly
 python3 tests/overlay/frame_test.py      # extension reached from sandboxed frames like the Dynatrace app
 python3 tests/overlay/auto_test.py       # automatic desktop and mobile snapshots, measured at other widths
+# the same in a real browser window with the site zoomed to 90% (picture must still match the map):
+ZOOM=0.9 HEADED=1 xvfb-run -a -s "-screen 0 1400x900x24" python3 tests/overlay/auto_test.py
 # app page map, rendered outside Dynatrace with the snapshot from e2e.py:
 node_modules/.bin/esbuild tests/app/harness.tsx --bundle --outfile=tests/app/harness.js --format=iife --jsx=automatic
 python3 tests/app/snapshot_view_test.py

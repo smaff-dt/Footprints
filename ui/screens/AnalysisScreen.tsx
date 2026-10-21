@@ -1,31 +1,22 @@
 /**
  * Second screen: one snapshot with its numbers. Opens when a snapshot is
  * saved or picked from the list. The device is the snapshot's; the period and
- * the conversion goal can be changed. Areas can be renamed, the snapshot
- * deleted.
+ * the conversion goal can be changed. Zones and their names are saved with
+ * the snapshot; the snapshot can be deleted.
  */
-import { useEffect, useMemo, useState } from "react";
-import { Card, Checkbox, Dropdown, Option, Segmented } from "../components/Controls";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Card, Dropdown, Option } from "../components/Controls";
 import { PagePicker } from "../components/PagePicker";
-import { RANK_LABELS, RankBy, rankSections, SectionDetail, SectionRanking } from "../components/SectionRanking";
-import { MapMode, SnapshotView } from "../components/SnapshotView";
-import { Empty, ErrorNotice, Loading } from "../components/States";
-import { Device, Filters, GroupBy, PAGE_LIMIT, PageScope, Timeframe } from "../dql/queries";
-import {
-  Application,
-  useClickPositions,
-  useElementConversions,
-  usePageConversion,
-  usePageElements,
-  usePageVisits,
-  useScrollDepth,
-  useSections,
-} from "../hooks/data";
+import { MapMode, SnapshotView, ZoneCount } from "../components/SnapshotView";
+import { ErrorNotice, Loading } from "../components/States";
+import { runQuery, num } from "../dql/client";
+import { Device, Filters, PAGE_LIMIT, PageScope, Timeframe, zoneQuery } from "../dql/queries";
+import { Application, useClickPositions, useElementConversions, usePageConversion, usePageElements, usePageVisits, useScrollDepth } from "../hooks/data";
 import { choiceForKey, usePageChoices } from "../hooks/pageChoices";
-import { deviceName, formatInt, formatWhen } from "../lib/format";
+import { deviceName, formatWhen } from "../lib/format";
 import { pageHost, pagePath } from "../lib/labels";
 import type { PageGroup } from "../lib/pages";
-import { deleteSnapshot, getSnapshotMeta, loadSnapshot, saveNames, Snapshot, SnapshotMeta } from "../lib/snapshots";
+import { deleteSnapshot, getSnapshotMeta, loadSnapshot, saveZoning, Snapshot, SnapshotMeta } from "../lib/snapshots";
 import { usePersistentState } from "../lib/storage";
 import { c } from "../theme";
 
@@ -35,11 +26,7 @@ const TIMEFRAMES: Option<Timeframe>[] = [
   { value: "30d", label: "Last 30 days" },
 ];
 
-type View = "map" | "list";
-const VIEWS: Option<View>[] = [
-  { value: "map", label: "Page map" },
-  { value: "list", label: "List" },
-];
+const MODES: MapMode[] = ["zones", "clicks", "scroll", "table"];
 
 /** What a snapshot covers: one page, a page group, or (older snapshots) a page template with `*`. */
 function scopeForKey(key: string, groups: PageGroup[]): PageScope | null {
@@ -76,8 +63,8 @@ export function AnalysisScreen(props: {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [timeframe, setTimeframe] = usePersistentState<Timeframe>("fp.timeframe", "7d");
-  const [view, setView] = usePersistentState<View>("fp.view", "map");
-  const [mode, setMode] = usePersistentState<MapMode>("fp.mapMode", "areas");
+  const [storedMode, setMode] = usePersistentState<MapMode>("fp.mapMode", "zones");
+  const mode: MapMode = MODES.includes(storedMode) ? storedMode : "zones";
   const [goalKey, setGoalKey] = usePersistentState("fp.goal", "");
   const [goalPagesWanted, setGoalPagesWanted] = useState(false);
 
@@ -112,27 +99,46 @@ export function AnalysisScreen(props: {
   const visits = usePageVisits(filters, scope, rk);
   const elements = usePageElements(filters, scope, rk);
   const scroll = useScrollDepth(filters, scope, rk);
-  const positions = useClickPositions(view === "map" && mode === "clicks" ? filters : null, scope, rk);
+  const positions = useClickPositions(mode === "clicks" ? filters : null, scope, rk);
   const pageConv = usePageConversion(filters, scope, goal?.scope ?? null, rk);
-  const elConv = useElementConversions(view === "map" ? filters : null, scope, goal?.scope ?? null, rk);
+  const elConv = useElementConversions(filters, scope, goal?.scope ?? null, rk);
   const pageVisits = visits.data ?? 0;
 
-  async function rename(areaKey: string, name: string) {
-    if (!snapshot || !meta) return;
-    const names = { ...snapshot.names, [areaKey]: name };
-    const before = snapshot;
-    setSnapshot({ ...snapshot, names });
-    setSaving(true);
-    setSaveError(null);
-    try {
-      const version = await saveNames(meta, snapshot, names);
-      setMeta({ ...meta, version });
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : String(e));
-      setSnapshot(before);
-    } finally {
-      setSaving(false);
-    }
+  // Exact visits and conversions of one zone, asked when the zone is turned on.
+  const countKey = JSON.stringify([filters, scope, goal?.scope ?? null, rk]);
+  const countZone = useCallback(
+    async (sections: string[]): Promise<ZoneCount> => {
+      if (!filters || !scope) throw new Error("No data");
+      const rows = await runQuery(zoneQuery(filters, scope, goal?.scope ?? null, sections));
+      return { visits: num(rows[0]?.["visits"]), converted: goal ? num(rows[0]?.["converted"]) : null };
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [countKey],
+  );
+
+  // Zoning: shown at once, saved a moment later (several quick changes make one save).
+  const saveTimer = useRef<number | null>(null);
+  const latest = useRef<{ meta: SnapshotMeta | null; snapshot: Snapshot | null }>({ meta: null, snapshot: null });
+  latest.current = { meta, snapshot };
+  function onZoning(zones: string[], names: Record<string, string>) {
+    if (!snapshot) return;
+    const next = { ...snapshot, zoning: { zones }, names };
+    setSnapshot(next);
+    if (saveTimer.current) window.clearTimeout(saveTimer.current);
+    saveTimer.current = window.setTimeout(async () => {
+      const { meta: m, snapshot: s } = latest.current;
+      if (!m || !s) return;
+      setSaving(true);
+      setSaveError(null);
+      try {
+        const version = await saveZoning(m, s, s.zoning?.zones ?? [], s.names);
+        setMeta((cur) => (cur ? { ...cur, version } : cur));
+      } catch (e) {
+        setSaveError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setSaving(false);
+      }
+    }, 800);
   }
 
   async function remove() {
@@ -218,122 +224,41 @@ export function AnalysisScreen(props: {
           onNewGroup={() => props.onEditGroup(null, snapshot.appId, setGoalKey)}
           onEditGroup={(g) => props.onEditGroup(g, snapshot.appId, setGoalKey)}
         />
-        <div style={{ fontSize: 13, color: c.muted, maxWidth: 320 }}>
-          Numbers come from {deviceName(snapshot.device).toLowerCase()} visits, like the snapshot.
-        </div>
       </Card>
 
       {!scope && props.groupsReady && <ErrorNotice title="The page group of this snapshot was deleted" detail="Its pages are unknown, so there are no numbers to show." />}
       {saveError && <ErrorNotice title="Could not save your change" detail={saveError} />}
+      {elements.error && <ErrorNotice title="Could not load the clicks" detail={elements.error} />}
 
       {scope && filters && (
-        <>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "12px 32px", padding: "14px 18px", borderRadius: 14, background: c.surface, border: `1px solid ${c.line}`, alignItems: "center" }}>
-            <Kpi label="Visits to this page" value={visits.loading ? "…" : formatInt(pageVisits)} />
-            {goal && pageConv.data && <Kpi label={`Reach “${goal.label}”`} value={pageConv.data.visits ? `${((100 * pageConv.data.converted) / pageConv.data.visits).toFixed(1)}%` : "–"} />}
-            <div style={{ marginLeft: "auto" }}>
-              <Segmented label="View" value={view} options={VIEWS} onChange={setView} />
-            </div>
-          </div>
-
-          {view === "map" && (
-            <Card label="Page map">
-              {elements.error && <ErrorNotice title="Could not load the clicks" detail={elements.error} />}
-              {(elements.loading || visits.loading) && <Loading label="Preparing the page map…" rows={3} />}
-              {elements.data && !elements.loading && !visits.loading && (
-                <SnapshotView
-                  snapshot={snapshot}
-                  elements={elements.data}
-                  scroll={scroll.data && scroll.data.visits ? scroll.data : null}
-                  pageVisits={pageVisits}
-                  deviceKey={device}
-                  saving={saving}
-                  onRename={rename}
-                  mode={mode}
-                  onMode={setMode}
-                  heat={mode === "clicks" ? { rows: positions.data, loading: positions.loading, error: positions.error } : null}
-                  goal={
-                    goal
-                      ? { label: goal.label, page: pageConv.data, elements: elConv.data, loading: pageConv.loading || elConv.loading, error: pageConv.error ?? elConv.error }
-                      : null
-                  }
-                />
-              )}
-            </Card>
+        <Card label="Page map">
+          {(elements.loading || visits.loading) && <Loading label="Preparing the page map…" rows={3} />}
+          {elements.data && !elements.loading && !visits.loading && (
+            <SnapshotView
+              snapshot={snapshot}
+              elements={elements.data}
+              scroll={scroll.data && scroll.data.visits ? scroll.data : null}
+              pageVisits={pageVisits}
+              periodLabel={TIMEFRAMES.find((t) => t.value === timeframe)?.label}
+              saving={saving}
+              zones={snapshot.zoning?.zones ?? []}
+              names={snapshot.names}
+              onZoning={onZoning}
+              countZone={countZone}
+              countKey={countKey}
+              mode={mode}
+              onMode={setMode}
+              heat={mode === "clicks" ? { rows: positions.data, loading: positions.loading, error: positions.error } : null}
+              goal={
+                goal
+                  ? { label: goal.label, page: pageConv.data, elements: elConv.data, loading: pageConv.loading || elConv.loading, error: pageConv.error ?? elConv.error }
+                  : null
+              }
+            />
           )}
-          {view === "list" && <SectionListView filters={filters} scope={scope} pageVisits={pageVisits} visitsLoading={visits.loading} refreshKey={rk} />}
-        </>
+        </Card>
       )}
     </>
-  );
-}
-
-const MIN_VISITS = 20;
-const GROUPINGS: Option<GroupBy>[] = [
-  { value: "sections", label: "Page sections" },
-  { value: "elements", label: "Individual elements" },
-];
-const RANKINGS: Option<RankBy>[] = (Object.keys(RANK_LABELS) as RankBy[]).map((k) => ({ value: k, label: RANK_LABELS[k] }));
-
-/** The ranking of the page's sections or elements, without a picture. */
-function SectionListView(props: { filters: Filters; scope: PageScope; pageVisits: number; visitsLoading: boolean; refreshKey: number }) {
-  const [groupBy, setGroupBy] = usePersistentState<GroupBy>("fp.groupBy", "sections");
-  const [rankBy, setRankBy] = usePersistentState<RankBy>("fp.rankBy", "rate");
-  const [hideSmall, setHideSmall] = usePersistentState("fp.hideSmall", true);
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
-  const sections = useSections(props.filters, props.scope, groupBy, props.refreshKey);
-  useEffect(() => setSelectedKey(null), [groupBy]);
-  const ranked = useMemo(() => (sections.data ? rankSections(sections.data, props.pageVisits, rankBy) : []), [sections.data, props.pageVisits, rankBy]);
-  const shown = hideSmall ? ranked.filter((s) => s.visits >= MIN_VISITS) : ranked;
-  const hiddenCount = ranked.length - shown.length;
-  const selected = shown.find((s) => s.key === selectedKey) ?? shown[0] ?? null;
-  const noun = groupBy === "sections" ? "sections" : "elements";
-  const loading = sections.loading || props.visitsLoading;
-
-  return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 20, alignItems: "flex-start" }}>
-      <Card label="Ranking" style={{ flex: "999 1 560px", minWidth: 0, display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", justifyContent: "space-between", gap: 16 }}>
-          <Segmented label="Show" value={groupBy} options={GROUPINGS} onChange={setGroupBy} />
-          <Dropdown label="Rank by" value={rankBy} options={RANKINGS} onChange={setRankBy} />
-        </div>
-        <Checkbox label={`Hide ${noun} with fewer than ${MIN_VISITS} visits`} checked={hideSmall} onChange={setHideSmall} />
-        {sections.error && <ErrorNotice title={`Could not load the page ${noun}`} detail={sections.error} />}
-        {loading && <Loading label={`Counting clicks per ${noun.slice(0, -1)}…`} />}
-        {!loading && sections.data && shown.length === 0 && (
-          <Empty
-            title={`No ${noun} to show`}
-            detail={hiddenCount > 0 ? `All ${noun} on this page have fewer than ${MIN_VISITS} visits. Untick the box above to see them anyway.` : "Nobody clicked on this page in the selected period."}
-          />
-        )}
-        {!loading && shown.length > 0 && (
-          <>
-            <SectionRanking sections={shown} rankBy={rankBy} selectedKey={selected?.key ?? null} onSelect={setSelectedKey} />
-            {hiddenCount > 0 && (
-              <p style={{ margin: 0, fontSize: 13, color: c.muted }}>
-                {hiddenCount} {hiddenCount === 1 ? noun.slice(0, -1) : noun} with too little data hidden.
-              </p>
-            )}
-          </>
-        )}
-      </Card>
-      <Card label="Details" style={{ flex: "1 1 340px", minWidth: 0 }}>
-        {selected && !loading ? (
-          <SectionDetail section={selected} pageVisits={props.pageVisits} isElement={groupBy === "elements"} />
-        ) : (
-          <Empty title="Nothing selected" detail={`Pick one of the ${noun} on the left to see its details.`} />
-        )}
-      </Card>
-    </div>
-  );
-}
-
-function Kpi(props: { label: string; value: string }) {
-  return (
-    <div>
-      <div style={{ fontSize: 12, fontWeight: 600, color: c.muted }}>{props.label}</div>
-      <div style={{ fontSize: 24, fontWeight: 800, fontVariantNumeric: "tabular-nums" }}>{props.value}</div>
-    </div>
   );
 }
 

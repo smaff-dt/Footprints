@@ -33,7 +33,10 @@ export function ShowOnPage(props: {
 }) {
   const version = useExtensionVersion();
   const installed = version !== null;
-  const canAuto = versionAtLeast(version, "0.4.0");
+  /** Snapshots need this version of the extension (it records every block of the page and fixes zoom). */
+  const NEEDED = "0.5.0";
+  const upToDate = versionAtLeast(version, NEEDED);
+  const updateMessage = `The Footprints extension needs an update (version ${NEEDED} or later; this browser has ${version}): open chrome://extensions, click ↻ on Footprints, then reload this page.`;
   const [status, setStatus] = useState<Status>({ kind: "idle" });
 
   async function build(filters: Filters = props.filters): Promise<PagePayload> {
@@ -64,6 +67,10 @@ export function ShowOnPage(props: {
   }
 
   async function onShow() {
+    if (installed && !upToDate) {
+      setStatus({ kind: "problem", message: updateMessage, payload: null });
+      return;
+    }
     setStatus({ kind: "working" });
     let payload: PagePayload | null = null;
     try {
@@ -85,7 +92,7 @@ export function ShowOnPage(props: {
     setStatus({ kind: "auto", device, text: "Preparing the data…" });
     try {
       if (!installed) throw new Error("not-installed");
-      if (!canAuto) throw new Error("The Footprints extension needs an update: open chrome://extensions, click ↻ on Footprints, then reload this page.");
+      if (!upToDate) throw new Error(updateMessage);
       const filters: Filters = { ...props.filters, device };
       const [payload, widths] = await Promise.all([build(filters), loadClickWidths(filters, props.scope).catch(() => [])]);
       const plan = planWidths(widths, device);

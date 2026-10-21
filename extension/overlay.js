@@ -642,9 +642,11 @@
     const kind =
       KINDS[el.localName] ||
       (el.closest("a") ? "link" : el.closest("button") ? "button" : hasPicture ? "image" : "element");
-    if (own) return `${clip(own, 40)} (${kind})`;
+    // A plain text or box is named by its text alone; links, buttons and pictures say what they are.
+    const label = (text) => (kind === "element" ? clip(text, 40) : `${clip(text, 40)} (${kind})`);
+    if (own) return label(own);
     const near = nearbyText(el);
-    if (near) return `${clip(near, 40)} (${kind})`;
+    if (near) return label(near);
     return fallback && fallback !== "Area" ? fallback : kind.charAt(0).toUpperCase() + kind.slice(1);
   }
 
@@ -817,10 +819,12 @@
   }
 
   let moveFrame = 0;
+  const LIVE_NUMBERS = false;
   document.addEventListener(
     "mousemove",
     (e) => {
-      if (!state.payload || moveFrame) return;
+      // The live page only prepares the snapshot: the numbers are in the app.
+      if (!LIVE_NUMBERS || !state.payload || moveFrame) return;
       moveFrame = requestAnimationFrame(() => {
         moveFrame = 0;
         const t = targetAt(e.clientX, e.clientY);
@@ -835,81 +839,17 @@
 
   // ── Full render (on data, detail or layout changes) ───────────────────────
 
+  /**
+   * The live page is where the snapshot is prepared: the visitor-like state of
+   * the page (cookies accepted, a menu open, the window size) is set by hand,
+   * then saved. Zones, heatmaps and numbers are read in the Footprints app.
+   */
   function render() {
     if (state.auto) return;
     if (!state.payload) return;
     ensureHost();
-    buildAreas();
-    if (state.hover && state.hover.kind === "area") {
-      const a = state.areas.find((x) => x.el === state.hover.el);
-      state.hover = a ? { ...state.hover, area: a } : null;
-    }
-    const p = state.payload;
-    const areas = state.areas;
-    const total = pageClicks();
-    const scroll = hasScroll();
-    if (!scroll && state.metric === "seen") state.metric = "share";
-    const maxMetric = Math.max(1e-9, ...areas.map((a) => metricOf(a, total)));
-    const ranked = areas.slice().sort((a, b) => metricOf(b, total) - metricOf(a, total));
-
-    // On the page: one number per area, the chosen metric. No names.
-    const areaHtml = areas
-      .slice()
-      .sort((a, b) => b.box.w * b.box.h - a.box.w * a.box.h)
-      .map((a) => {
-        const r = metricOf(a, total) / maxMetric;
-        const c = heat(r);
-        const alpha = (0.1 + 0.4 * r).toFixed(2);
-        return `<div class="area" style="left:${a.box.x}px;top:${a.box.y}px;width:${a.box.w}px;height:${a.box.h}px;background:rgba(232,116,46,${alpha})">
-          <span class="chip" style="background:${c.bg};color:${c.fg}">${pct(metricOf(a, total), 1)}</span></div>`;
-      })
-      .join("");
-
-    const maxEl = Math.max(1, ...state.found.map((f) => f.row.clicks));
-    const dotHtml = state.showDots
-      ? state.found
-          .filter((f) => f.el !== document.body && f.el !== document.documentElement)
-          .sort((a, b) => b.row.clicks - a.row.clicks)
-          .slice(0, 80)
-          .map((f) => {
-            const b = pageBox(f.el);
-            const size = 8 + Math.round(14 * Math.sqrt(f.row.clicks / maxEl));
-            return `<div class="dot" style="left:${b.x + b.w / 2}px;top:${b.y + b.h / 2}px;width:${size}px;height:${size}px"></div>`;
-          })
-          .join("")
-      : "";
-
-    const pageW = Math.max(document.documentElement.scrollWidth, window.innerWidth);
-    let foldHtml = "";
-    if (scroll && state.showFolds) {
-      let lastY = -Infinity;
-      let slot = 0;
-      foldHtml = [0.75, 0.5, 0.25]
-        .map((share) => ({ share, d: depthReachedBy(share) }))
-        .filter((l) => l.d !== null && l.d > 0)
-        .map((l) => {
-          // Lines very close together get their labels side by side.
-          slot = l.d - lastY < 26 ? slot + 1 : 0;
-          lastY = l.d;
-          return `<div class="fold" style="top:${Math.round(l.d)}px;width:${pageW}px">
-            <span style="left:${8 + slot * 230}px">${Math.round(l.share * 100)}% of visits see down to here</span></div>`;
-        })
-        .join("");
-    }
-
-    root.getElementById("fp-layer").innerHTML = `${areaHtml}${foldHtml}${dotHtml}<div id="fp-hl" class="hl"></div>`;
-
-    const listHtml = ranked
-      .slice(0, 10)
-      .map(
-        (a) => `<li><button type="button" class="item" data-act="area" data-value="${a.key}">
-          <span class="row"><strong>${esc(a.name)}</strong><span>${pct(metricOf(a, total), 1)}</span></span>
-          <span class="bar"><span style="width:${Math.max(3, Math.round((100 * metricOf(a, total)) / maxMetric))}%"></span></span></button></li>`,
-      )
-      .join("");
-
-    panel.render(state.collapsed ? collapsedHtml() : panelHtml({ total, areas, listHtml, scroll }));
-    updateHover();
+    root.getElementById("fp-layer").innerHTML = "";
+    panel.render(state.collapsed ? collapsedHtml() : panelHtml());
   }
 
   function collapsedHtml() {
@@ -964,43 +904,28 @@
     return `<div class="${cls}" role="status">${esc(s.text)}</div>`;
   }
 
-  function panelHtml({ total, areas, listHtml, scroll }) {
+  function panelHtml() {
     const p = state.payload;
     const busy = state.saving && state.saving.kind === "busy";
+    const w = window.innerWidth;
+    const kind = w >= 1024 ? "desktop" : w >= 768 ? "tablet" : "mobile";
     return `<div class="panel" role="dialog" aria-label="Footprints">
       <div class="row"><span class="brand">Footprints</span>
         <span><button type="button" class="btn" data-act="collapse" aria-label="Minimise panel">–</button>
-        <button type="button" class="btn" data-act="close" aria-label="Remove overlay">✕</button></span></div>
-      <div class="muted">${esc(p.app || "")} · ${esc(p.period || "")} · ${esc(p.device || "")}</div>
+        <button type="button" class="btn" data-act="close" aria-label="Close">✕</button></span></div>
+      <div class="muted">${esc(p.app || "")}</div>
+      <p style="margin:8px 0">Get the page ready as visitors see it — close the cookie banner, open a menu, resize the window — then save it.</p>
       <button type="button" class="primary" data-act="save" ${busy ? "disabled" : ""}>${busy ? "Saving snapshot…" : "Save snapshot to Footprints"}</button>
       ${savingHtml()}
-      ${
-        scroll
-          ? `<div class="seg" role="group" aria-label="Show on the page">
-              <button type="button" data-act="metric" data-value="share" aria-pressed="${state.metric === "share"}">Share of clicks</button>
-              <button type="button" data-act="metric" data-value="seen" aria-pressed="${state.metric === "seen"}">Seen by</button>
-            </div>`
-          : ""
-      }
-      <div id="fp-detail-box"></div>
-      <div class="stats">
-        <div class="stat">Clicks on this page<b>${fmt(total)}</b></div>
-        <div class="stat">Areas<b>${fmt(areas.length)}</b></div>
-      </div>
-      <label for="fp-detail">Detail</label>
-      <input id="fp-detail" type="range" min="1" max="5" step="1" value="${state.detail}" />
-      <div class="scale"><span>Fewer, larger areas</span><span>More, smaller</span></div>
-      <label style="font-weight:500"><input type="checkbox" data-act="dots" ${state.showDots ? "checked" : ""}/> Show clicked elements</label>
-      ${scroll ? `<label style="font-weight:500;margin-top:4px"><input type="checkbox" data-act="folds" ${state.showFolds ? "checked" : ""}/> Show how far visitors scroll</label>` : ""}
-      <ol aria-label="Areas">${listHtml}</ol>
-      ${notesHtml(total)}
+      <div class="muted" style="margin-top:8px">This window is ${w} px wide: the snapshot will be a ${kind} page. Zones, heatmaps and numbers are in the Footprints app.</div>
     </div>`;
   }
 
   // ── Snapshot: picture of the whole page + map of its areas and elements ───
 
   const CLICKABLE = "a[href], button, input, select, textarea, label, summary, img, [role=button], [role=link], [role=tab], [onclick], [tabindex]";
-  const MAX_ELEMENTS = 5000;
+  const MAX_ELEMENTS = 8000;
+  const MIN_BLOCK = 12; // px: smaller blocks are not worth pointing at
   const CONTENT_TAGS = new Set(["img", "svg", "picture", "video", "canvas", "h1", "h2", "h3", "h4", "h5", "h6", "p", "li"]);
 
   /** Something a visitor can see and point at: a picture, a heading, a line of text (a product title, a price). */
@@ -1063,6 +988,13 @@
     };
   }
 
+  /** A name for a block that is neither a text nor a picture: its heading, role or contents. */
+  function blockName(el, ctx) {
+    const name = areaName(el, ctx, false);
+    if (name && name !== "Area") return name;
+    return el.querySelector("img, picture, svg, video, canvas") ? "Picture block" : "Block";
+  }
+
   /** DOM elements behind the last map, for measuring them again at other widths. */
   let lastMap = { els: [], rows: [] };
 
@@ -1085,7 +1017,7 @@
     const els = [];
     const rows = [];
     const byEl = new Map();
-    const add = (el, rawKey) => {
+    const add = (el, rawKey, lean) => {
       if (el === document.body || el === document.documentElement || (host && host.contains(el))) return;
       const existing = byEl.get(el);
       if (existing) {
@@ -1095,12 +1027,14 @@
       if (elements.length >= MAX_ELEMENTS) return;
       const r = el.getBoundingClientRect();
       if (r.width < 2 || r.height < 2) return;
+      const keys = canonicalKeys(el);
       const item = {
-        keys: rawKey ? [rawKey, ...canonicalKeys(el)] : canonicalKeys(el),
+        // Plain blocks keep only their full path, to keep snapshots small.
+        keys: rawKey ? [rawKey, ...keys] : lean ? keys.slice(0, 1) : keys,
         box: round(pageBox(el)),
-        name: elementName(el, ""),
+        name: lean && !isContent(el) ? blockName(el, ctx) : elementName(el, ""),
         chain: areaChain(el, total, cache).map(areaId),
-        content: contentOf(el),
+        ...(lean ? {} : { content: contentOf(el) }),
       };
       byEl.set(el, item);
       elements.push(item);
@@ -1113,14 +1047,26 @@
       if (i >= 0 && !rows[i]) rows[i] = f.row.xpath;
     }
     for (const el of document.querySelectorAll(CLICKABLE)) add(el, null);
-    // Texts and pictures too, clicked or not, so any of them can be selected in Footprints.
+    // Every visible block of the page — texts, pictures and the boxes around
+    // them — clicked or not, so any of them can be turned into a zone in
+    // Footprints. A wrapper exactly as big as the block around it adds
+    // nothing: it is left out.
     for (const el of document.body.querySelectorAll("*")) {
       if (elements.length >= MAX_ELEMENTS) break;
+      if (byEl.has(el)) continue;
       if (el.closest("svg") !== el && el.closest("svg")) continue; // parts of an icon
-      if (!isContent(el)) continue;
+      if (host && host.contains(el)) continue;
+      const r = el.getBoundingClientRect();
+      const content = isContent(el);
+      if (!content && (r.width < MIN_BLOCK || r.height < MIN_BLOCK)) continue;
       const cs = getComputedStyle(el);
       if (cs.visibility === "hidden" || cs.display === "none" || Number(cs.opacity) === 0) continue;
-      add(el, null);
+      if (!content) {
+        let a = el.parentElement;
+        while (a && a !== document.body && !byEl.has(a)) a = a.parentElement;
+        if (a && a !== document.body && sameBox(byEl.get(a).box, round(pageBox(el)))) continue;
+      }
+      add(el, null, true);
     }
     uniqueNames(areas.map((a) => [a, areaName(a._el, ctx, false)]));
     areas.forEach((a) => delete a._el);

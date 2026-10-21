@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Footprints",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "Shows on the live page which areas your visitors see and click, and saves page snapshots to the Footprints app for Dynatrace.",
   "permissions": [
     "scripting",

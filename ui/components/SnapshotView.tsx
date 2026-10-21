@@ -1,40 +1,47 @@
 /**
- * A saved snapshot with its numbers: the picture of the page, each area
- * colored by the chosen metric (only the number is drawn on the page), and
- * any element of the page — clicked or not — can be pointed at or selected to
- * read its numbers. A sidebar ranks the areas and lets you rename them.
+ * A saved snapshot with its numbers.
+ *
+ * - Zones: the page opens with no zone. Pointing at it outlines the block
+ *   under the pointer (any block of the page, clicked or not); a click turns
+ *   it into a zone, which stays on and shows the chosen metric; another click
+ *   turns it off. The card of a zone lists the blocks around it, from the
+ *   smallest to the largest, to pick the right one. Zones and their names are
+ *   saved with the snapshot.
+ * - Click heatmap and Scroll heatmap: read through their colors only.
+ * - Table: the clicked elements of the page, sortable.
+ *
  * Numbers are recomputed from the current filters; the snapshot only stores
- * the picture and the map.
+ * the picture and the map of the page.
  */
 import { CSSProperties, KeyboardEvent, MouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { HEAT_CELL, ZONE_MAX_ELEMENTS } from "../dql/queries";
 import type { ClickPosition, Conversion, ElementConversion, PageElement, ScrollDepth } from "../hooks/data";
-import { HEAT_CELL } from "../dql/queries";
-import { ClickHeatLayer, HeatLegend, ScrollHeatLayer } from "./Heatmaps";
-import { deviceName, formatInt, formatWhen } from "../lib/format";
-import { usePersistentState } from "../lib/storage";
+import { formatInt, formatWhen } from "../lib/format";
 import {
-  AREA_METRICS,
-  AreaMetric,
-  areaNumbers,
-  AreaStat,
-  areasAt,
+  chainOf,
   depthReachedBy,
   exposureOf,
-  formatMetric,
+  formatShare,
+  insideTotals,
+  layoutsOf,
   matchClicks,
   matchConversions,
-  layoutsOf,
   placeClicks,
-  MatchedElement,
   reachAt,
-  metricValue,
-  startingDetail,
+  suggestZones,
+  ZONE_METRICS,
+  ZoneMetric,
+  ZoneNumbers,
+  zoneNumbers,
+  zoneTree,
+  zoneValue,
 } from "../lib/snapshotMath";
 import type { Box, Snapshot } from "../lib/snapshots";
+import { usePersistentState } from "../lib/storage";
 import { c } from "../theme";
+import { ClickHeatLayer, HeatLegend, ScrollHeatLayer } from "./Heatmaps";
 
-/** Zones, any element, or a heatmap (read through its colors only). */
-export type MapMode = "areas" | "elements" | "clicks" | "scroll";
+export type MapMode = "zones" | "clicks" | "scroll" | "table";
 
 export interface HeatData {
   rows: ClickPosition[] | null;
@@ -50,21 +57,21 @@ export interface GoalData {
   error: string | null;
 }
 
-type Target = { kind: "element"; index: number } | { kind: "area"; id: string };
-type Hover = (Target & { x: number; y: number }) | null;
+/** Visits that clicked in a zone, counted by Dynatrace; converted is null without a goal. */
+export interface ZoneCount {
+  visits: number;
+  converted: number | null;
+}
+
+type Count = ZoneCount | "loading" | "error";
 
 const HEAT = ["#F6D9A8", "#EE9B4D", "#B8461A"];
+const BLUE = "#2F4BD8";
 
 function chipColors(ratio: number): { bg: string; fg: string } {
   if (ratio >= 0.66) return { bg: HEAT[2], fg: "#FFFFFF" };
   if (ratio >= 0.33) return { bg: HEAT[1], fg: "#16191F" };
   return { bg: HEAT[0], fg: "#16191F" };
-}
-
-function pctOf(n: number, total: number): string {
-  if (!total) return "–";
-  const v = Math.min(100, (100 * n) / total);
-  return v > 0 && v < 0.1 ? "<0.1%" : `${v.toFixed(v >= 10 ? 0 : 1)}%`;
 }
 
 /** Names taken from a line of text come in quotes: drop them for display. */
@@ -82,110 +89,149 @@ export function SnapshotView(props: {
   elements: PageElement[];
   scroll: ScrollDepth | null;
   pageVisits: number;
-  deviceKey: string;
+  periodLabel?: string;
   saving: boolean;
-  onRename: (areaKey: string, name: string) => void;
+  /** Paths of the zones turned on, and names given to zones. */
+  zones: string[];
+  names: Record<string, string>;
+  onZoning: (zones: string[], names: Record<string, string>) => void;
+  /** Exact visits (and conversions) of a zone; `countKey` changes with the period and goal. */
+  countZone?: (sections: string[]) => Promise<ZoneCount>;
+  countKey?: string;
   mode?: MapMode;
   onMode?: (mode: MapMode) => void;
   heat?: HeatData | null;
   goal?: GoalData | null;
 }) {
   const { snapshot, scroll, pageVisits } = props;
-  const mode: MapMode = props.mode ?? "areas";
-  const goal = props.goal ?? null;
   const map = snapshot.map;
-  const matching = useMemo(() => matchClicks(map, props.elements), [map, props.elements]);
+  const mode: MapMode = props.mode ?? "zones";
+  const goal = props.goal ?? null;
   const hasScroll = !!(scroll && scroll.visits);
-  const conversions = useMemo(() => (goal?.elements ? matchConversions(map, goal.elements) : null), [map, goal?.elements]);
+  const W = map.page.w;
+  const H = map.page.h;
 
-  const [metric, setMetric] = useState<AreaMetric>("seen");
-  const [detail, setDetail] = useState<number>(() => startingDetail(map, matching));
-  const [showDots, setShowDots] = useState(true);
+  const matching = useMemo(() => matchClicks(map, props.elements), [map, props.elements]);
+  const tree = useMemo(() => zoneTree(map), [map]);
+  const inside = useMemo(() => insideTotals(map, tree, matching), [map, tree, matching]);
+  const conversions = useMemo(() => (goal?.elements ? matchConversions(map, goal.elements) : null), [map, goal?.elements]);
+  const byPath = useMemo(() => {
+    const m = new Map<string, number>();
+    tree.paths.forEach((p, i) => p && !m.has(p) && m.set(p, i));
+    return m;
+  }, [tree]);
+  // Matched elements inside each block (for estimated conversions).
+  const indexesInside = useMemo(() => {
+    const out = new Map<number, number[]>();
+    for (const i of matching.byElement.keys()) for (let j = i; j >= 0; j = tree.parent[j]) out.set(j, [...(out.get(j) ?? []), i]);
+    return out;
+  }, [matching, tree]);
+
+  const [metric, setMetric] = usePersistentState<ZoneMetric>("fp.zoneMetric", "share");
+  const metricOptions = ZONE_METRICS.filter((m) => (hasScroll || !m.needsScroll) && (goal || !m.needsGoal));
+  const activeMetric: ZoneMetric = metricOptions.some((m) => m.value === metric) ? metric : "share";
   const [showLines, setShowLines] = useState(true);
-  const [sidebar, setSidebar] = usePersistentState("fp.sidebar", false);
-  const [hover, setHover] = useState<Hover>(null);
+  const [listOpen, setListOpen] = usePersistentState("fp.zoneList", false);
+  const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
   const [pointerY, setPointerY] = useState<{ pageY: number; x: number; y: number } | null>(null);
-  const [pinned, setPinned] = useState<Target | null>(null);
-  // Areas hidden from the picture (by key, so the choice survives a change of detail).
-  const [hidden, setHidden] = useState<Set<string>>(() => new Set());
-  const toggleArea = (key: string) =>
-    setHidden((h) => {
-      const next = new Set(h);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  useEffect(() => setHidden(new Set()), [snapshot]);
-  // Esc clears the selection.
+  const [selected, setSelected] = useState<number | null>(null);
+  const [preview, setPreview] = useState<number | null>(null);
+  const [suggestNote, setSuggestNote] = useState<string | null>(null);
+  const [showHelp, setShowHelp] = useState(false);
+  const canvasRef = useRef<HTMLDivElement>(null);
+
+  // Zones on, as element indexes (paths not on this snapshot are ignored).
+  const zoneIdx = useMemo(() => props.zones.map((p) => byPath.get(p)).filter((i): i is number => i !== undefined), [props.zones, byPath]);
+  const zoneSet = useMemo(() => new Set(zoneIdx), [zoneIdx]);
+  const pathOf = (i: number) => tree.paths[i] ?? "";
+  const nameOf = (i: number) => props.names[pathOf(i)] || clean(map.elements[i].name);
+
   useEffect(() => {
-    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setPinned(null);
+    setSelected(null);
+    setHover(null);
+    setPreview(null);
+    setPointerY(null);
+  }, [mode]);
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setSelected(null);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
-  const canvasRef = useRef<HTMLDivElement>(null);
 
-  // A new snapshot or new data: start again from a sensible detail level.
-  useEffect(() => setDetail(startingDetail(map, matching)), [map, matching]);
-  useEffect(() => setPinned((p) => (p && p.kind === "area" ? null : p)), [detail]);
-  // Each view has its own things to select.
+  // ── Exact numbers for the zones turned on ──────────────────────────────────
+  const [counts, setCounts] = useState<Map<string, Count>>(() => new Map());
+  const sectionsOf = (i: number) => Array.from(new Set(inside[i].rows.map((r) => r.raw).filter((s): s is string => !!s)));
+  const countKeyOf = (i: number) => `${props.countKey ?? ""}|${pathOf(i)}`;
   useEffect(() => {
-    setPinned(null);
-    setHover(null);
-  }, [mode]);
-  const metricOptions = AREA_METRICS.filter((m) => (hasScroll || !m.needsScroll) && (conversions || !m.needsGoal));
-  const activeMetric: AreaMetric = metricOptions.some((m) => m.value === metric) ? metric : "share";
-
-  const stats = useMemo(() => areasAt(map, matching, detail), [map, matching, detail]);
-  const statById = useMemo(() => new Map(stats.map((s) => [s.area.id, s])), [stats]);
-  const numbers = useMemo(
-    () => new Map(stats.map((s) => [s.area.id, areaNumbers(s, matching.totalClicks, pageVisits, scroll, conversions)])),
-    [stats, matching.totalClicks, pageVisits, scroll, conversions],
-  );
-  const valueOf = (s: AreaStat) => metricValue(numbers.get(s.area.id)!, activeMetric) ?? 0;
-  const maxValue = Math.max(1e-9, ...stats.map(valueOf));
-  const ranked = stats.slice().sort((a, b) => valueOf(b) - valueOf(a));
-  const nameOf = (s: AreaStat) => snapshot.names[s.area.key] || clean(s.area.name);
-
-  const W = map.page.w;
-  const H = map.page.h;
-  const at = (b: Box): CSSProperties => ({
-    left: `${(100 * b.x) / W}%`,
-    top: `${(100 * b.y) / H}%`,
-    width: `${(100 * b.w) / W}%`,
-    height: `${(100 * b.h) / H}%`,
-  });
-
-  const matched = Array.from(matching.byElement.values());
-  const maxClicks = Math.max(1, ...matched.map((m) => m.clicks));
-
-  // Scroll lines; lines that fall almost on top of each other share one label.
-  const lineGroups = useMemo(() => {
-    if (!hasScroll) return [];
-    const lines = [0.75, 0.5, 0.25]
-      .map((share) => ({ share, d: depthReachedBy(scroll, share) }))
-      .filter((l): l is { share: number; d: number } => l.d !== null && l.d > 0 && l.d < H);
-    const groups: { d: number; shares: number[] }[] = [];
-    for (const l of lines) {
-      const last = groups[groups.length - 1];
-      if (last && Math.abs(l.d - last.d) < Math.max(40, H * 0.015)) last.shares.push(l.share);
-      else groups.push({ d: l.d, shares: [l.share] });
+    if (!props.countZone) return;
+    for (const i of zoneIdx) {
+      const key = countKeyOf(i);
+      if (counts.has(key)) continue;
+      const sections = sectionsOf(i);
+      if (sections.length === 0) {
+        setCounts((m) => new Map(m).set(key, { visits: 0, converted: goal ? 0 : null }));
+        continue;
+      }
+      if (sections.length > ZONE_MAX_ELEMENTS) continue;
+      setCounts((m) => new Map(m).set(key, "loading"));
+      props.countZone(sections).then(
+        (r) => setCounts((m) => new Map(m).set(key, r)),
+        () => setCounts((m) => new Map(m).set(key, "error")),
+      );
     }
-    return groups;
-  }, [hasScroll, scroll, H]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoneIdx, props.countKey, props.countZone]);
 
-  /**
-   * What the pointer is on: in the Zones view, the smallest zone; in the
-   * Elements view, the smallest element of the page, clicked or not. Heatmaps
-   * are read through their colors only: nothing to point at.
-   */
-  function targetAt(e: MouseEvent<HTMLDivElement>): Target | null {
-    if (mode !== "areas" && mode !== "elements") return null;
+  function numbersOf(i: number): ZoneNumbers {
+    const cnt = counts.get(countKeyOf(i));
+    const counted = cnt && typeof cnt === "object" ? cnt : null;
+    return zoneNumbers(map.elements[i].box, inside[i], matching.totalClicks, pageVisits, scroll, counted, conversions, indexesInside.get(i) ?? []);
+  }
+  const zoneNums = new Map(zoneIdx.map((i) => [i, numbersOf(i)]));
+  const valueOf = (i: number) => zoneValue(zoneNums.get(i) ?? numbersOf(i), activeMetric);
+  const maxValue = Math.max(1e-9, ...zoneIdx.map((i) => valueOf(i) ?? 0));
+
+  // ── Changing the zoning ────────────────────────────────────────────────────
+  function setZones(next: number[], names = props.names) {
+    props.onZoning(Array.from(new Set(next.map(pathOf).filter(Boolean))), names);
+  }
+  function toggle(i: number) {
+    if (zoneSet.has(i)) {
+      setZones(zoneIdx.filter((z) => z !== i));
+      if (selected === i) setSelected(null);
+    } else {
+      setZones([...zoneIdx, i]);
+      setSelected(i);
+    }
+  }
+  function replaceZone(from: number, to: number) {
+    if (from === to) return;
+    setZones([...zoneIdx.filter((z) => z !== from && z !== to), to]);
+    setSelected(to);
+    setPreview(null);
+  }
+  function rename(i: number, name: string) {
+    setZones(zoneIdx, { ...props.names, [pathOf(i)]: name });
+  }
+  function suggest() {
+    const picked = suggestZones(map, tree, inside);
+    if (picked.length === 0) {
+      setSuggestNote("No clicks recorded on this page in the period: nothing to suggest yet.");
+      return;
+    }
+    setZones(Array.from(new Set([...zoneIdx, ...picked])));
+    const share = picked.reduce((s, i) => s + inside[i].clicks, 0) / Math.max(1, matching.totalClicks);
+    setSuggestNote(`These ${picked.length} zones get ${formatShare(share)} of the page's clicks: ${picked.map((i) => nameOf(i)).join(", ")}.`);
+  }
+
+  /** The smallest block under the pointer. */
+  function blockAt(e: MouseEvent<HTMLDivElement>): number | null {
     const rect = e.currentTarget.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * W;
     const y = ((e.clientY - rect.top) / rect.height) * H;
     let best = -1;
     let bestSize = Infinity;
-    if (mode === "elements") map.elements.forEach((el, i) => {
+    map.elements.forEach((el, i) => {
       if (!contains(el.box, x, y)) return;
       const size = el.box.w * el.box.h;
       if (size < bestSize) {
@@ -193,214 +239,167 @@ export function SnapshotView(props: {
         bestSize = size;
       }
     });
-    if (mode === "elements") return best >= 0 ? { kind: "element", index: best } : null;
-    let area: AreaStat | null = null;
-    for (const s of stats) if (!hidden.has(s.area.key) && contains(s.area.box, x, y) && (!area || s.area.box.w * s.area.box.h < area.area.box.w * area.area.box.h)) area = s;
-    return area ? { kind: "area", id: area.area.id } : null;
+    return best >= 0 ? best : null;
   }
 
-  function sameTarget(a: Target | null, b: Target | null): boolean {
-    if (!a || !b) return a === b;
-    return a.kind === b.kind && (a.kind === "element" ? a.index === (b as typeof a).index : a.id === (b as typeof a).id);
-  }
+  // ── Click heatmap ──────────────────────────────────────────────────────────
+  const heat = props.heat ?? null;
+  const placed = useMemo(() => (heat?.rows ? placeClicks(map, layoutsOf(snapshot), heat.rows, HEAT_CELL) : null), [heat?.rows, map, snapshot]);
+  const placedTotal = placed ? placed.exact + placed.approx : 0;
 
-  function focusArea(id: string) {
-    if (pinned?.kind === "area" && pinned.id === id) {
-      setPinned(null); // a second click deselects
-      return;
+  // Scroll lines; lines that fall almost on top of each other share one label.
+  const lineGroups = useMemo(() => {
+    if (!hasScroll) return [];
+    const ls = [0.75, 0.5, 0.25]
+      .map((share) => ({ share, d: depthReachedBy(scroll, share) }))
+      .filter((l): l is { share: number; d: number } => l.d !== null && l.d > 0 && l.d < H);
+    const groups: { d: number; shares: number[] }[] = [];
+    for (const l of ls) {
+      const last = groups[groups.length - 1];
+      if (last && Math.abs(l.d - last.d) < Math.max(40, H * 0.015)) last.shares.push(l.share);
+      else groups.push({ d: l.d, shares: [l.share] });
     }
-    setPinned({ kind: "area", id });
-    const node = canvasRef.current?.querySelector<HTMLElement>(`[data-area="${CSS.escape(id)}"]`);
-    node?.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
+    return groups;
+  }, [hasScroll, scroll, H]);
+
+  const at = (b: Box): CSSProperties => ({
+    left: `${(100 * b.x) / W}%`,
+    top: `${(100 * b.y) / H}%`,
+    width: `${(100 * b.w) / W}%`,
+    height: `${(100 * b.h) / H}%`,
+  });
 
   const coverage = matching.totalClicks ? matching.matchedClicks / matching.totalClicks : 1;
   const notes: string[] = [];
   if (matching.totalClicks && coverage < 0.8) {
     notes.push(
-      `Only ${pctOf(matching.matchedClicks, matching.totalClicks)} of this period's clicks are on elements of this snapshot. The page may have changed since it was taken: consider a new snapshot.`,
+      `Only ${formatShare(coverage)} of this period's clicks are on elements of this snapshot. The page may have changed since it was taken: consider a new snapshot.`,
     );
-  }
-  if (props.deviceKey === "all" && hasScroll) {
-    notes.push("“Seen by” mixes desktop and mobile visits, whose pages have different lengths. Choose one device for exact numbers.");
   }
   if (snapshot.truncated) notes.push("The page is very long: the snapshot stops at 16,000 pixels.");
   if (goal?.error) notes.push(`Could not compute conversions: ${goal.error}`);
 
-  // Click heatmap: every click moved onto the snapshot (see placeClicks).
-  const heat = props.heat ?? null;
-  const placed = useMemo(
-    () => (heat?.rows ? placeClicks(map, layoutsOf(snapshot), heat.rows, HEAT_CELL) : null),
-    [heat?.rows, map, snapshot],
-  );
-  const placedTotal = placed ? placed.exact + placed.approx : 0;
-
-  const hl = (t: Target | null): Box | null =>
-    !t ? null : t.kind === "element" ? map.elements[t.index]?.box ?? null : statById.get(t.id)?.area.box ?? null;
-  const hoverBox = hover && !sameTarget(hover, pinned) ? hl(hover) : null;
-  const pinnedBox = hl(pinned);
-
-  // The structural path of each element ("html[1]/body[1]/…"), to know what contains what.
-  const paths = useMemo(() => map.elements.map((e) => e.keys.find((k) => k.startsWith("html[1]/")) ?? null), [map]);
-
-  /** Clicks recorded on elements inside this one, and on the nearest clicked element around it. */
-  function related(index: number): Related {
-    const path = paths[index];
-    if (!path) return { inside: 0, insideCount: 0, around: null };
-    let inside = 0;
-    let insideCount = 0;
-    let around: Related["around"] = null;
-    for (const m of matching.byElement.values()) {
-      if (m.index === index) continue;
-      const p = paths[m.index];
-      if (!p) continue;
-      if (p.startsWith(`${path}/`)) {
-        inside += m.clicks;
-        insideCount += 1;
-      } else if (path.startsWith(`${p}/`) && (!around || p.length > around.depth)) {
-        around = { name: map.elements[m.index].name, clicks: m.clicks, visits: m.visits, depth: p.length };
-      }
-    }
-    return { inside, insideCount, around };
-  }
-
-  function cardFor(t: Target): ReactNode {
-    if (t.kind === "element") {
-      const el = map.elements[t.index];
-      return (
-        <ElementCard
-          related={related(t.index)}
-          goal={goal && conversions ? { label: goal.label, page: goal.page, mine: conversions.get(t.index) ?? null } : null}
-          name={el.name}
-          m={matching.byElement.get(t.index) ?? null}
-          seen={exposureOf(scroll, el.box)}
-          pageVisits={pageVisits}
-          totalClicks={matching.totalClicks}
-          area={(() => {
-            const id = el.chain.length ? el.chain[Math.min(detail, el.chain.length) - 1] : null;
-            const s = id ? statById.get(id) : undefined;
-            return s ? nameOf(s) : null;
-          })()}
-        />
-      );
-    }
-    const s = statById.get(t.id);
-    return s ? (
-      <AreaCard
-        stat={s}
-        name={nameOf(s)}
-        numbers={numbers.get(s.area.id)!}
-        snapshot={snapshot}
-        pageVisits={pageVisits}
-        goal={goal && conversions ? { label: goal.label, page: goal.page } : null}
-      />
-    ) : null;
-  }
+  const metricInfo = ZONE_METRICS.find((m) => m.value === activeMetric)!;
+  const hoverI = mode === "zones" && hover && hover.i !== selected ? hover.i : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* Top bar: what to show */}
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px 20px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {/* What to show */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px 18px" }}>
         {props.onMode && (
           <div role="radiogroup" aria-label="View" style={{ display: "flex", padding: 3, borderRadius: 12, background: c.surfaceAlt, border: `1px solid ${c.line}` }}>
             {(
               [
-                ["areas", "Zones"],
-                ["elements", "Elements"],
+                ["zones", "Zones"],
                 ["clicks", "Click heatmap"],
                 ["scroll", "Scroll heatmap"],
+                ["table", "Table"],
               ] as [MapMode, string][]
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                role="radio"
-                aria-checked={mode === value}
-                disabled={value === "scroll" && !hasScroll}
-                onClick={() => props.onMode!(value)}
-                style={{
-                  minHeight: 36,
-                  padding: "0 14px",
-                  borderRadius: 9,
-                  border: 0,
-                  background: mode === value ? c.surface : "transparent",
-                  boxShadow: mode === value ? "0 1px 3px rgba(22,25,31,0.18)" : "none",
-                  color: c.ink,
-                  fontWeight: mode === value ? 700 : 500,
-                  cursor: value === "scroll" && !hasScroll ? "not-allowed" : "pointer",
-                  opacity: value === "scroll" && !hasScroll ? 0.5 : 1,
-                }}
-              >
-                {label}
-              </button>
-            ))}
+            ).map(([value, label]) => {
+              const off = value === "scroll" && !hasScroll;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={mode === value}
+                  disabled={off}
+                  onClick={() => props.onMode!(value)}
+                  style={{
+                    minHeight: 36,
+                    padding: "0 14px",
+                    borderRadius: 9,
+                    border: 0,
+                    background: mode === value ? c.surface : "transparent",
+                    boxShadow: mode === value ? "0 1px 3px rgba(22,25,31,0.18)" : "none",
+                    color: c.ink,
+                    fontWeight: mode === value ? 700 : 500,
+                    cursor: off ? "not-allowed" : "pointer",
+                    opacity: off ? 0.5 : 1,
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
           </div>
         )}
-        {mode === "areas" && (
-        <>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: c.muted }}>
-          Show
-          <select
-            value={activeMetric}
-            onChange={(e) => setMetric(e.target.value as AreaMetric)}
-            style={{ minHeight: 40, padding: "0 10px", borderRadius: 10, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.ink, fontWeight: 700 }}
-          >
-            {metricOptions.map((m) => (
-              <option key={m.value} value={m.value}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: c.muted }}>
-          Detail
-          <input
-            type="range"
-            min={1}
-            max={5}
-            step={1}
-            value={detail}
-            onChange={(e) => setDetail(Number(e.target.value))}
-            aria-label="Detail: fewer, larger areas to more, smaller ones"
-            style={{ width: 140, accentColor: "#2F4BD8" }}
-          />
-        </label>
-        </>
+        {mode === "zones" && (
+          <>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: c.muted, position: "relative" }}>
+              Show
+              <select
+                value={activeMetric}
+                onChange={(e) => setMetric(e.target.value as ZoneMetric)}
+                style={{ minHeight: 40, padding: "0 10px", borderRadius: 10, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.ink, fontWeight: 700 }}
+              >
+                {metricOptions.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                aria-label={`What is ${metricInfo.label}?`}
+                aria-expanded={showHelp}
+                onClick={(e) => {
+                  e.preventDefault();
+                  setShowHelp((v) => !v);
+                }}
+                style={{ width: 28, height: 28, borderRadius: 999, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.muted, cursor: "pointer", fontWeight: 700 }}
+              >
+                i
+              </button>
+              {showHelp && (
+                <span
+                  role="note"
+                  style={{ position: "absolute", top: "100%", left: 0, marginTop: 6, zIndex: 10, width: 300, padding: "10px 12px", borderRadius: 10, background: c.surface, border: `1px solid ${c.line}`, boxShadow: "0 8px 24px rgba(22,25,31,0.18)", color: c.ink, fontWeight: 500, fontSize: 13 }}
+                >
+                  <strong>{metricInfo.label}:</strong> {metricInfo.help}
+                </span>
+              )}
+            </label>
+            <button type="button" onClick={suggest} style={pillButton}>
+              ✦ Suggest zones
+            </button>
+            {hasScroll && <Toggle label="Scroll lines" checked={showLines} onChange={setShowLines} />}
+            <button type="button" onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen} style={{ ...pillButton, marginLeft: "auto", background: listOpen ? c.accentSoft : c.surface }}>
+              Zone list ({zoneIdx.length})
+            </button>
+          </>
         )}
-        {mode === "elements" && <Toggle label="Mark clicked elements" checked={showDots} onChange={setShowDots} />}
         {mode === "clicks" && <HeatLegend low="Fewer clicks" high="More clicks" />}
-        {mode === "scroll" && <HeatLegend low="Few visits get here" high="All visits" />}
-        {hasScroll && mode !== "clicks" && <Toggle label="Scroll lines" checked={showLines} onChange={setShowLines} />}
-        {mode === "areas" && (
-        <button
-          type="button"
-          onClick={() => setSidebar(!sidebar)}
-          aria-expanded={sidebar}
-          style={{
-            marginLeft: "auto",
-            minHeight: 38,
-            padding: "0 14px",
-            borderRadius: 10,
-            border: `1px solid ${c.lineStrong}`,
-            background: sidebar ? c.accentSoft : c.surface,
-            color: c.ink,
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          {sidebar ? "Hide zone list" : "Zone list"}
-        </button>
+        {mode === "scroll" && (
+          <>
+            <HeatLegend low="Few visits get here" high="All visits" />
+            <Toggle label="Scroll lines" checked={showLines} onChange={setShowLines} />
+          </>
         )}
       </div>
 
-      <div style={{ fontSize: 13, color: c.muted }}>
-        Snapshot of {formatWhen(snapshot.capturedAt)} · {deviceName(snapshot.device)} page
-        {props.deviceKey !== "all" ? ` · numbers from ${props.deviceKey} visits` : ""} · {pctOf(matching.matchedClicks, matching.totalClicks)} of this
-        period's clicks are on it
-        {mode === "areas" ? " · click a zone to select it, click again to deselect" : mode === "elements" ? " · point at any element (a logo, a title, a price); click to select it" : ""}
-        {props.saving ? " · saving names…" : ""}
-        {goal && (goal.loading ? " · computing conversions…" : goal.page ? ` · goal “${goal.label}”: ${pctOf(goal.page.converted, goal.page.visits)} of visits reach it` : "")}
+      {/* The context, in a few words */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        <Chip>{snapshot.device === "mobile" ? "Mobile" : snapshot.device === "tablet" ? "Tablet" : "Desktop"} visits</Chip>
+        {props.periodLabel && <Chip>{props.periodLabel}</Chip>}
+        <Chip>{formatInt(pageVisits)} visits</Chip>
+        <Chip title="Share of this period's clicks that land on an element of this snapshot">{formatShare(coverage)} of clicks found</Chip>
+        {goal && <Chip>{goal.loading && !goal.page ? `Goal “${goal.label}”…` : goal.page ? `${formatShare(goal.page.visits ? goal.page.converted / goal.page.visits : 0)} reach “${goal.label}”` : `Goal “${goal.label}”`}</Chip>}
+        <Chip muted>Snapshot of {formatWhen(snapshot.capturedAt)}</Chip>
+        {props.saving && <Chip muted>Saving…</Chip>}
       </div>
+
+      {mode === "zones" && zoneIdx.length === 0 && !suggestNote && (
+        <div style={{ fontSize: 14, color: c.muted }}>Point at the page to see its blocks; click one to turn it into a zone, click it again to turn it off. Or let Footprints suggest the zones that get the most clicks.</div>
+      )}
+      {mode === "zones" && suggestNote && (
+        <div role="status" style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", padding: "10px 12px", borderRadius: 10, background: c.accentSoft, fontSize: 14 }}>
+          <span>✦ {suggestNote}</span>
+          <button type="button" onClick={() => setSuggestNote(null)} aria-label="Dismiss" style={pillButton}>
+            OK
+          </button>
+        </div>
+      )}
       {mode === "clicks" && heat && (
         <div style={{ fontSize: 13, color: c.muted }}>
           {heat.loading
@@ -408,10 +407,9 @@ export function SnapshotView(props: {
             : heat.error
               ? `Could not load click positions: ${heat.error}`
               : placed
-                ? `${formatInt(placedTotal)} clicks placed: ${pctOf(placed.exact, placedTotal)} at their exact spot (the page was measured at the visitor's window width), ${pctOf(
-                    placed.approx,
-                    placedTotal,
-                  )} estimated within their element${placed.unplaced ? ` · ${formatInt(placed.unplaced)} clicks are on elements not on this snapshot` : ""}.`
+                ? `${formatInt(placedTotal)} clicks placed: ${formatShare(placedTotal ? placed.exact / placedTotal : 0)} at their exact spot, ${formatShare(placedTotal ? placed.approx / placedTotal : 0)} estimated within their element${
+                    placed.unplaced ? ` · ${formatInt(placed.unplaced)} clicks are on elements not on this snapshot` : ""
+                  }.`
                 : ""}
         </div>
       )}
@@ -421,203 +419,204 @@ export function SnapshotView(props: {
         </div>
       ))}
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
-        {/* The page */}
-        <div
-          ref={canvasRef}
-          onMouseMove={(e) => {
-            const t = targetAt(e);
-            setHover(t ? { ...t, x: e.clientX, y: e.clientY } : null);
-            const rect = e.currentTarget.getBoundingClientRect();
-            setPointerY(mode === "scroll" ? { pageY: ((e.clientY - rect.top) / rect.height) * H, x: e.clientX, y: e.clientY } : null);
+      {mode === "table" ? (
+        <TopTable
+          map={map}
+          matching={matching}
+          scroll={scroll}
+          pageVisits={pageVisits}
+          conversions={conversions}
+          goalLabel={goal?.label ?? null}
+          nameOf={nameOf}
+          onShow={(i) => {
+            if (!zoneSet.has(i)) setZones([...zoneIdx, i]);
+            props.onMode?.("zones");
+            window.setTimeout(() => setSelected(i), 0);
           }}
-          onMouseLeave={() => {
-            setHover(null);
-            setPointerY(null);
-          }}
-          onClick={(e) => {
-            const t = targetAt(e);
-            setPinned((p) => (sameTarget(p, t) ? null : t));
-          }}
-          style={{
-            flex: "999 1 560px",
-            minWidth: 0,
-            position: "relative",
-            border: `1px solid ${c.lineStrong}`,
-            borderRadius: 10,
-            overflow: "hidden",
-            background: "#FFFFFF",
-            cursor: mode === "areas" || mode === "elements" ? "pointer" : "default",
-          }}
-        >
-          <img src={snapshot.image.dataUrl} alt={`Snapshot of ${snapshot.title || snapshot.url}`} draggable={false} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} />
-          {mode === "clicks" && placed && <ClickHeatLayer cells={placed.cells} width={W} height={H} />}
-          {mode === "scroll" && hasScroll && <ScrollHeatLayer scroll={scroll!} height={H} />}
-          {stats
-            .filter((s) => mode === "areas" && !hidden.has(s.area.key))
-            .sort((a, b) => b.area.box.w * b.area.box.h - a.area.box.w * a.area.box.h)
-            .map((s) => {
-              const r = valueOf(s) / maxValue;
-              const h = chipColors(r);
-              const isSel = pinned?.kind === "area" && pinned.id === s.area.id;
-              return (
-                <div
-                  key={s.area.id}
-                  data-area={s.area.id}
-                  style={{
-                    position: "absolute",
-                    ...at(s.area.box),
-                    boxSizing: "border-box",
-                    borderRadius: 6,
-                    border: isSel ? "3px solid #2F4BD8" : "2px solid rgba(184,70,26,0.75)",
-                    background: `rgba(232,116,46,${(0.1 + 0.4 * r).toFixed(2)})`,
-                    pointerEvents: "none",
-                  }}
-                >
-                  <span
-                    style={{
-                      position: "absolute",
-                      left: 4,
-                      top: 4,
-                      padding: "2px 8px",
-                      borderRadius: 999,
-                      fontSize: 12,
-                      fontWeight: 800,
-                      background: isSel ? "#2F4BD8" : h.bg,
-                      color: isSel ? "#FFFFFF" : h.fg,
-                      boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
-                    }}
-                  >
-                    {formatMetric(metricValue(numbers.get(s.area.id)!, activeMetric), activeMetric)}
-                  </span>
-                </div>
-              );
-            })}
-          {showLines && mode !== "clicks" &&
-            lineGroups.map((g) => (
-              <div key={g.d} style={{ position: "absolute", left: 0, right: 0, top: `${(100 * g.d) / H}%`, borderTop: "2px dashed rgba(47,75,216,0.85)", pointerEvents: "none" }}>
-                <span style={{ position: "absolute", right: 8, top: -20, padding: "1px 8px", borderRadius: "6px 6px 0 0", background: "#2F4BD8", color: "#FFFFFF", fontSize: 11, fontWeight: 700 }}>
-                  {joinShares(g.shares)} of visits see down to here
-                </span>
-              </div>
-            ))}
-          {showDots && mode === "elements" &&
-            matched.map((m) => {
-              const e = map.elements[m.index];
-              const size = 8 + Math.round(14 * Math.sqrt(m.clicks / maxClicks));
-              return (
-                <div
-                  key={m.index}
-                  style={{
-                    position: "absolute",
-                    left: `${(100 * (e.box.x + e.box.w / 2)) / W}%`,
-                    top: `${(100 * (e.box.y + e.box.h / 2)) / H}%`,
-                    width: size,
-                    height: size,
-                    transform: "translate(-50%, -50%)",
-                    borderRadius: "50%",
-                    background: "rgba(47,75,216,0.85)",
-                    border: "2px solid #FFFFFF",
-                    boxShadow: "0 1px 3px rgba(0,0,0,0.35)",
-                    pointerEvents: "none",
-                  }}
-                />
-              );
-            })}
-          {hoverBox && <Outline box={hoverBox} at={at} dashed />}
-          {pinnedBox && <Outline box={pinnedBox} at={at} />}
-          {pinned && pinnedBox && (
-            <section
-              aria-label="Selected"
-              onClick={(e) => e.stopPropagation()}
-              onMouseMove={(e) => e.stopPropagation()}
-              style={{
-                position: "absolute",
-                zIndex: 5,
-                width: 300,
-                maxWidth: "45%",
-                ...(pinnedBox.y < H - 520 ? { top: `${(100 * pinnedBox.y) / H}%` } : { bottom: 8 }),
-                // Next to the selection, on the side with more room.
-                ...(pinnedBox.x + pinnedBox.w / 2 < W / 2
-                  ? { left: `calc(${(100 * (pinnedBox.x + pinnedBox.w)) / W}% + 12px)` }
-                  : { right: `calc(${100 - (100 * pinnedBox.x) / W}% + 12px)` }),
-                border: `2px solid ${c.accent}`,
-                borderRadius: 12,
-                padding: 12,
-                background: c.surface,
-                color: c.ink,
-                boxShadow: "0 8px 28px rgba(22,25,31,0.25)",
-                fontSize: 13,
-                lineHeight: 1.45,
-                cursor: "default",
-              }}
-            >
-              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: -6 }}>
-                <button
-                  type="button"
-                  aria-label="Close"
-                  onClick={() => setPinned(null)}
-                  style={{ width: 30, height: 30, borderRadius: 8, border: `1px solid ${c.line}`, background: c.surface, color: c.muted, cursor: "pointer" }}
-                >
-                  ✕
-                </button>
-              </div>
-              {cardFor(pinned)}
-            </section>
-          )}
-        </div>
-
-        {/* Sidebar: the selection, then the areas ranked by the chosen metric, with renaming */}
-        {sidebar && mode === "areas" && (
-          <aside
-            aria-label="Zones"
+        />
+      ) : (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
+          {/* The page */}
+          <div
+            ref={canvasRef}
+            onMouseMove={(e) => {
+              if (mode === "zones") {
+                const i = blockAt(e);
+                setHover(i !== null ? { i, x: e.clientX, y: e.clientY } : null);
+              }
+              if (mode === "scroll") {
+                const rect = e.currentTarget.getBoundingClientRect();
+                setPointerY({ pageY: ((e.clientY - rect.top) / rect.height) * H, x: e.clientX, y: e.clientY });
+              }
+            }}
+            onMouseLeave={() => {
+              setHover(null);
+              setPointerY(null);
+            }}
+            onClick={(e) => {
+              if (mode !== "zones") return;
+              const i = blockAt(e);
+              if (i !== null) toggle(i);
+            }}
             style={{
-              flex: "1 1 300px",
+              flex: "999 1 560px",
               minWidth: 0,
-              position: "sticky",
-              top: 12,
-              maxHeight: "calc(100vh - 24px)",
-              overflow: "auto",
-              display: "flex",
-              flexDirection: "column",
-              gap: 8,
+              position: "relative",
+              border: `1px solid ${c.lineStrong}`,
+              borderRadius: 10,
+              overflow: "hidden",
+              background: "#FFFFFF",
+              cursor: mode === "zones" ? "pointer" : "default",
             }}
           >
-            <div style={{ fontSize: 13, color: c.muted }}>
-              {ranked.length} zones · ranked by {AREA_METRICS.find((m) => m.value === activeMetric)?.label.toLowerCase()}. Tick the zones to
-              show on the picture; click a name to select it; rename a zone to call it what your team calls it.
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button type="button" onClick={() => setHidden(new Set())} disabled={hidden.size === 0} style={smallButton}>
-                Show all
-              </button>
-              <button type="button" onClick={() => setHidden(new Set(stats.map((s) => s.area.key)))} disabled={hidden.size >= stats.length} style={smallButton}>
-                Hide all
-              </button>
-            </div>
-            {ranked.map((s) => (
-              <AreaRow
-                key={s.area.id}
-                value={formatMetric(valueOf(s), activeMetric)}
-                ratio={valueOf(s) / maxValue}
-                name={nameOf(s)}
-                suggested={snapshot.names[s.area.key] ? clean(s.area.name) : null}
-                selected={pinned?.kind === "area" && pinned.id === s.area.id}
-                visible={!hidden.has(s.area.key)}
-                onToggle={() => toggleArea(s.area.key)}
-                onSelect={() => focusArea(s.area.id)}
-                onRename={(name) => props.onRename(s.area.key, name)}
-              />
-            ))}
-          </aside>
-        )}
-      </div>
+            <img src={snapshot.image.dataUrl} alt={`Snapshot of ${snapshot.title || snapshot.url}`} draggable={false} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} />
+            {mode === "clicks" && placed && <ClickHeatLayer cells={placed.cells} width={W} height={H} />}
+            {mode === "scroll" && hasScroll && <ScrollHeatLayer scroll={scroll!} height={H} />}
 
-      {hover && !sameTarget(hover, pinned) && <HoverCard x={hover.x} y={hover.y}>{cardFor(hover)}</HoverCard>}
-      {/* Scroll heatmap: the only reading on pointing is how many visits get this far. */}
+            {mode === "zones" &&
+              zoneIdx
+                .slice()
+                .sort((a, b) => map.elements[b].box.w * map.elements[b].box.h - map.elements[a].box.w * map.elements[a].box.h)
+                .map((i) => {
+                  const v = valueOf(i);
+                  const r = (v ?? 0) / maxValue;
+                  const h = chipColors(r);
+                  const isSel = selected === i;
+                  return (
+                    <div
+                      key={i}
+                      data-zone={pathOf(i)}
+                      style={{
+                        position: "absolute",
+                        ...at(map.elements[i].box),
+                        boxSizing: "border-box",
+                        borderRadius: 4,
+                        border: isSel ? `3px solid ${BLUE}` : "2px solid rgba(184,70,26,0.9)",
+                        background: `rgba(232,116,46,${(0.12 + 0.38 * r).toFixed(2)})`,
+                        pointerEvents: "none",
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelected(isSel ? null : i);
+                        }}
+                        title={`${nameOf(i)} — click for details`}
+                        style={{
+                          position: "absolute",
+                          left: 3,
+                          top: 3,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          border: 0,
+                          fontSize: 12,
+                          fontWeight: 800,
+                          background: isSel ? BLUE : h.bg,
+                          color: isSel ? "#FFFFFF" : h.fg,
+                          boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
+                          pointerEvents: "auto",
+                          cursor: "pointer",
+                        }}
+                      >
+                        {formatShare(v)}
+                      </button>
+                    </div>
+                  );
+                })}
+
+            {showLines &&
+              mode !== "clicks" &&
+              lineGroups.map((g) => (
+                <div key={g.d} style={{ position: "absolute", left: 0, right: 0, top: `${(100 * g.d) / H}%`, borderTop: `2px dashed rgba(47,75,216,0.85)`, pointerEvents: "none" }}>
+                  <span style={{ position: "absolute", right: 8, top: -20, padding: "1px 8px", borderRadius: "6px 6px 0 0", background: BLUE, color: "#FFFFFF", fontSize: 11, fontWeight: 700 }}>
+                    {joinShares(g.shares)} of visits see down to here
+                  </span>
+                </div>
+              ))}
+
+            {hoverI !== null && <Outline box={map.elements[hoverI].box} at={at} dashed />}
+            {preview !== null && <Outline box={map.elements[preview].box} at={at} />}
+
+            {mode === "zones" && selected !== null && zoneSet.has(selected) && (
+              <ZoneCard
+                box={map.elements[selected].box}
+                W={W}
+                H={H}
+                name={nameOf(selected)}
+                numbers={numbersOf(selected)}
+                counting={counts.get(countKeyOf(selected)) === "loading"}
+                goal={goal ? { label: goal.label, page: goal.page } : null}
+                chain={chainOf(map, tree, selected).map((j) => ({ i: j, name: nameOf(j) }))}
+                current={selected}
+                onPick={(j) => replaceZone(selected, j)}
+                onPreview={setPreview}
+                onOff={() => toggle(selected)}
+                onClose={() => setSelected(null)}
+              />
+            )}
+          </div>
+
+          {/* The zones turned on, ranked by the metric, with renaming */}
+          {mode === "zones" && listOpen && (
+            <aside aria-label="Zones" style={{ flex: "1 1 300px", minWidth: 0, position: "sticky", top: 12, maxHeight: "calc(100vh - 24px)", overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
+              {zoneIdx.length === 0 ? (
+                <div style={{ fontSize: 13, color: c.muted }}>No zone yet: click a block of the page to turn it into a zone.</div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <span style={{ fontSize: 13, color: c.muted }}>
+                      {zoneIdx.length} zones · by {metricInfo.label.toLowerCase()}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setZones([]);
+                        setSelected(null);
+                      }}
+                      style={pillButton}
+                    >
+                      Turn all off
+                    </button>
+                  </div>
+                  {zoneIdx
+                    .slice()
+                    .sort((a, b) => (valueOf(b) ?? -1) - (valueOf(a) ?? -1))
+                    .map((i) => (
+                      <ZoneRow
+                        key={i}
+                        value={formatShare(valueOf(i))}
+                        ratio={(valueOf(i) ?? 0) / maxValue}
+                        name={nameOf(i)}
+                        suggested={props.names[pathOf(i)] ? clean(map.elements[i].name) : null}
+                        selected={selected === i}
+                        onSelect={() => {
+                          setSelected(selected === i ? null : i);
+                          canvasRef.current?.querySelector(`[data-zone="${CSS.escape(pathOf(i))}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+                        }}
+                        onRemove={() => toggle(i)}
+                        onRename={(name) => rename(i, name)}
+                      />
+                    ))}
+                </>
+              )}
+            </aside>
+          )}
+        </div>
+      )}
+
+      {hoverI !== null && hover && (
+        <HoverCard x={hover.x} y={hover.y} width={240}>
+          <div style={{ fontWeight: 700 }}>{nameOf(hoverI)}</div>
+          <div style={{ color: c.muted }}>
+            {metricInfo.label}: <strong style={{ color: c.ink }}>{formatShare(valueOf(hoverI))}</strong>
+            {zoneSet.has(hoverI) ? " · click to turn off" : " · click to turn into a zone"}
+          </div>
+        </HoverCard>
+      )}
       {pointerY && hasScroll && (
         <HoverCard x={pointerY.x} y={pointerY.y} width={240}>
-          <span style={{ fontSize: 20, fontWeight: 800, color: "#B8461A" }}>{formatMetric(reachAt(scroll, pointerY.pageY), "seen")}</span>{" "}
+          <span style={{ fontSize: 20, fontWeight: 800, color: "#B8461A" }}>{formatShare(reachAt(scroll, pointerY.pageY))}</span>{" "}
           <span style={{ color: c.muted }}>of visits scroll down to here</span>
         </HoverCard>
       )}
@@ -630,6 +629,29 @@ function joinShares(shares: number[]): string {
   return p.length === 1 ? p[0] : `${p.slice(0, -1).join(", ")} and ${p[p.length - 1]}`;
 }
 
+const pillButton: CSSProperties = {
+  minHeight: 36,
+  padding: "0 12px",
+  borderRadius: 10,
+  border: `1px solid ${c.lineStrong}`,
+  background: c.surface,
+  color: c.ink,
+  fontWeight: 600,
+  cursor: "pointer",
+  fontSize: 14,
+};
+
+function Chip(props: { children: ReactNode; muted?: boolean; title?: string }) {
+  return (
+    <span
+      title={props.title}
+      style={{ padding: "4px 10px", borderRadius: 999, background: props.muted ? "transparent" : c.surfaceAlt, border: `1px solid ${c.line}`, fontSize: 12, fontWeight: 600, color: props.muted ? c.muted : c.ink }}
+    >
+      {props.children}
+    </span>
+  );
+}
+
 function Outline(props: { box: Box; at: (b: Box) => CSSProperties; dashed?: boolean }) {
   return (
     <div
@@ -639,8 +661,8 @@ function Outline(props: { box: Box; at: (b: Box) => CSSProperties; dashed?: bool
         ...props.at(props.box),
         boxSizing: "border-box",
         borderRadius: 4,
-        border: `3px ${props.dashed ? "dashed" : "solid"} #2F4BD8`,
-        boxShadow: "0 0 0 3px rgba(47,75,216,0.25)",
+        border: `3px ${props.dashed ? "dashed" : "solid"} ${BLUE}`,
+        boxShadow: "0 0 0 3px rgba(47,75,216,0.2)",
         pointerEvents: "none",
       }}
     />
@@ -650,7 +672,7 @@ function Outline(props: { box: Box; at: (b: Box) => CSSProperties; dashed?: bool
 function Toggle(props: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
     <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, cursor: "pointer" }}>
-      <input type="checkbox" checked={props.checked} onChange={(e) => props.onChange(e.target.checked)} style={{ width: 18, height: 18, margin: 0, accentColor: "#2F4BD8" }} />
+      <input type="checkbox" checked={props.checked} onChange={(e) => props.onChange(e.target.checked)} style={{ width: 18, height: 18, margin: 0, accentColor: BLUE }} />
       {props.label}
     </label>
   );
@@ -659,7 +681,7 @@ function Toggle(props: { label: string; checked: boolean; onChange: (v: boolean)
 function HoverCard(props: { x: number; y: number; children: ReactNode; width?: number }) {
   const width = props.width ?? 300;
   const left = Math.min(props.x + 16, window.innerWidth - width - 12);
-  const top = Math.min(props.y + 16, window.innerHeight - 280);
+  const top = Math.min(props.y + 16, window.innerHeight - 120);
   return (
     <div
       role="tooltip"
@@ -675,7 +697,7 @@ function HoverCard(props: { x: number; y: number; children: ReactNode; width?: n
         border: `1px solid ${c.line}`,
         borderRadius: 12,
         boxShadow: "0 8px 28px rgba(22,25,31,0.22)",
-        padding: 14,
+        padding: 12,
         fontSize: 13,
         lineHeight: 1.45,
       }}
@@ -685,9 +707,9 @@ function HoverCard(props: { x: number; y: number; children: ReactNode; width?: n
   );
 }
 
-function Stat(props: { label: string; value: string; accent?: boolean }) {
+function Stat(props: { label: string; value: string; accent?: boolean; title?: string }) {
   return (
-    <div style={{ background: props.accent ? c.accentSoft : c.surfaceAlt, borderRadius: 8, padding: "6px 8px" }}>
+    <div title={props.title} style={{ background: props.accent ? c.accentSoft : c.surfaceAlt, borderRadius: 8, padding: "6px 8px" }}>
       <div style={{ fontSize: 11, color: c.muted }}>{props.label}</div>
       <div style={{ fontSize: 16, fontWeight: 800, color: props.accent ? c.accent : c.ink }}>{props.value}</div>
     </div>
@@ -696,131 +718,129 @@ function Stat(props: { label: string; value: string; accent?: boolean }) {
 
 const kicker: CSSProperties = { fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: c.muted };
 
-function AreaCard(props: {
-  stat: AreaStat;
+/** The card of a zone: its numbers, and the blocks around it to pick a larger or smaller one. */
+function ZoneCard(props: {
+  box: Box;
+  W: number;
+  H: number;
   name: string;
-  numbers: ReturnType<typeof areaNumbers>;
-  snapshot: Snapshot;
-  pageVisits: number;
+  numbers: ZoneNumbers;
+  counting: boolean;
   goal: { label: string; page: Conversion | null } | null;
+  chain: { i: number; name: string }[];
+  current: number;
+  onPick: (i: number) => void;
+  onPreview: (i: number | null) => void;
+  onOff: () => void;
+  onClose: () => void;
 }) {
-  const { stat, numbers } = props;
-  const top = stat.elements
-    .slice()
-    .sort((a, b) => b.clicks - a.clicks)
-    .slice(0, 5);
+  const { box, W, H, numbers: n } = props;
+  const approx = n.exact ? "" : "≈ ";
   return (
-    <>
-      <div style={kicker}>Zone</div>
-      <div style={{ fontWeight: 800, fontSize: 15 }}>{props.name}</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6, marginTop: 8 }}>
-        <Stat label="Seen by" value={formatMetric(numbers.seen, "seen")} accent />
-        <Stat label="Share of clicks" value={formatMetric(numbers.share, "share")} />
-        <Stat label="Clicks / 100 views" value={formatMetric(numbers.per100, "per100")} />
+    <section
+      aria-label="Selected zone"
+      onClick={(e) => e.stopPropagation()}
+      onMouseMove={(e) => e.stopPropagation()}
+      style={{
+        position: "absolute",
+        zIndex: 5,
+        width: 320,
+        maxWidth: "48%",
+        ...(box.y < H - 560 ? { top: `${(100 * box.y) / H}%` } : { bottom: 8 }),
+        ...(box.x + box.w / 2 < W / 2 ? { left: `calc(${(100 * (box.x + box.w)) / W}% + 12px)` } : { right: `calc(${100 - (100 * box.x) / W}% + 12px)` }),
+        border: `2px solid ${BLUE}`,
+        borderRadius: 12,
+        padding: 12,
+        background: c.surface,
+        color: c.ink,
+        boxShadow: "0 8px 28px rgba(22,25,31,0.25)",
+        fontSize: 13,
+        lineHeight: 1.45,
+        cursor: "default",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={kicker}>Zone</div>
+          <div style={{ fontWeight: 800, fontSize: 15, overflowWrap: "anywhere" }}>{props.name}</div>
+        </div>
+        <button type="button" aria-label="Close" onClick={props.onClose} style={{ width: 30, height: 30, flex: "none", borderRadius: 8, border: `1px solid ${c.line}`, background: c.surface, color: c.muted, cursor: "pointer" }}>
+          ✕
+        </button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6, marginTop: 8 }}>
+        <Stat label="Click share" value={formatShare(n.share)} accent title="Of all the clicks on the page, the share that happens in this zone" />
+        <Stat label="Click rate" value={n.rate === null ? "–" : `${approx}${formatShare(n.rate)}`} accent title="Of the visits that saw the zone, the share that clicked in it" />
+        <Stat label="Exposure" value={formatShare(n.exposure)} title="Share of visits that scrolled far enough to see the zone" />
+        <Stat label="Clicks" value={formatInt(n.clicks)} />
+      </div>
+      <div style={{ marginTop: 6, color: c.muted }}>
+        {props.counting ? "Counting the visits that clicked here…" : `${n.exact ? "" : "At least "}${formatInt(n.visits)} visits clicked here.`}
       </div>
       {props.goal && (
         <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 8, background: c.surfaceAlt }}>
           <div style={{ fontSize: 11, color: c.muted }}>Reached “{props.goal.label}” after a click here</div>
           <div style={{ fontSize: 16, fontWeight: 800 }}>
-            {formatMetric(numbers.conversion, "conversion")}
+            {n.conversion === null ? "–" : `${approx}${formatShare(n.conversion)}`}
             {props.goal.page && props.goal.page.visits > 0 && (
-              <span style={{ fontSize: 12, fontWeight: 500, color: c.muted }}> · page average {pctOf(props.goal.page.converted, props.goal.page.visits)}</span>
+              <span style={{ fontSize: 12, fontWeight: 500, color: c.muted }}> · page average {formatShare(props.goal.page.converted / props.goal.page.visits)}</span>
             )}
           </div>
         </div>
       )}
-      <div style={{ marginTop: 8, fontWeight: 600 }}>Most clicked inside</div>
-      <ul style={{ margin: "4px 0 0", paddingLeft: 16 }}>
-        {top.map((m) => (
-          <li key={m.index}>
-            {props.snapshot.map.elements[m.index].name} — {pctOf(m.visits, props.pageVisits)} of visits
-          </li>
-        ))}
-      </ul>
-    </>
-  );
-}
-
-interface Related {
-  inside: number;
-  insideCount: number;
-  around: { name: string; clicks: number; visits: number; depth: number } | null;
-}
-
-function ElementCard(props: {
-  m: MatchedElement | null;
-  name: string;
-  area: string | null;
-  seen: number | null;
-  pageVisits: number;
-  totalClicks: number;
-  related: Related;
-  goal: { label: string; page: Conversion | null; mine: { visits: number; converted: number } | null } | null;
-}) {
-  const r = props.related;
-  const g = props.goal;
-  const { m, seen, pageVisits } = props;
-  const seenVisits = seen !== null ? seen * pageVisits : 0;
-  return (
-    <>
-      <div style={kicker}>Element</div>
-      <div style={{ fontWeight: 800, fontSize: 15 }}>{props.name}</div>
-      {props.area && <div style={{ color: c.muted }}>in {props.area}</div>}
-      <div style={{ fontSize: 28, fontWeight: 800, color: "#B8461A", marginTop: 4 }}>{m ? pctOf(m.visits, pageVisits) : "0%"}</div>
-      <div style={{ color: c.muted }}>{m ? "of visits to this page click it" : "nobody clicked it in this period"}</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6, marginTop: 8 }}>
-        <Stat label="Seen by" value={seen === null ? "–" : formatMetric(seen, "seen")} accent />
-        <Stat label="Clicked by, of those who saw it" value={m && seenVisits > 0 ? pctOf(Math.min(m.visits, seenVisits), seenVisits) : "0%"} accent />
-        <Stat label="Clicks" value={formatInt(m?.clicks ?? 0)} />
-        <Stat label="Share of page clicks" value={m ? pctOf(m.clicks, props.totalClicks) : "0%"} />
+      {props.chain.length > 1 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 12, color: c.muted, marginBottom: 4 }}>Pick the block, from the smallest to the largest:</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 3 }} onMouseLeave={() => props.onPreview(null)}>
+            {props.chain.map((l, k) => (
+              <button
+                key={l.i}
+                type="button"
+                onClick={() => props.onPick(l.i)}
+                onMouseEnter={() => props.onPreview(l.i === props.current ? null : l.i)}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  minHeight: 30,
+                  padding: "0 8px",
+                  paddingLeft: 8 + k * 10,
+                  borderRadius: 8,
+                  border: l.i === props.current ? `2px solid ${BLUE}` : `1px solid ${c.line}`,
+                  background: l.i === props.current ? c.accentSoft : c.surface,
+                  color: c.ink,
+                  fontWeight: l.i === props.current ? 700 : 500,
+                  textAlign: "left",
+                  cursor: "pointer",
+                  fontSize: 13,
+                }}
+              >
+                <span aria-hidden="true" style={{ color: c.muted }}>
+                  {k === 0 ? "▪" : "└"}
+                </span>
+                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+        <button type="button" onClick={props.onOff} style={pillButton}>
+          Turn this zone off
+        </button>
       </div>
-      {r.inside > 0 && (
-        <div style={{ marginTop: 8, color: c.muted }}>
-          Plus {formatInt(r.inside)} clicks on {r.insideCount === 1 ? "an element" : `${r.insideCount} elements`} inside it.
-        </div>
-      )}
-      {g && (
-        <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 8, background: c.surfaceAlt }}>
-          <div style={{ fontSize: 11, color: c.muted }}>Reached “{g.label}” after clicking it</div>
-          <div style={{ fontSize: 16, fontWeight: 800 }}>
-            {g.mine && g.mine.visits > 0 ? pctOf(g.mine.converted, g.mine.visits) : "–"}
-            {g.page && g.page.visits > 0 && (
-              <span style={{ fontSize: 12, fontWeight: 500, color: c.muted }}> · page average {pctOf(g.page.converted, g.page.visits)}</span>
-            )}
-          </div>
-        </div>
-      )}
-      {!m && r.around && (
-        <div style={{ marginTop: 8, color: c.muted }}>
-          It is part of <strong style={{ color: c.ink }}>{r.around.name}</strong>, clicked by {pctOf(r.around.visits, pageVisits)} of visits: Dynatrace
-          recorded those clicks on that larger element.
-        </div>
-      )}
-    </>
+    </section>
   );
 }
 
-const smallButton: CSSProperties = {
-  minHeight: 32,
-  padding: "0 10px",
-  borderRadius: 8,
-  border: `1px solid ${c.line}`,
-  background: c.surface,
-  color: c.ink,
-  cursor: "pointer",
-  fontSize: 13,
-  fontWeight: 600,
-};
-
-function AreaRow(props: {
+function ZoneRow(props: {
   value: string;
   ratio: number;
   name: string;
   suggested: string | null;
   selected: boolean;
-  visible: boolean;
-  onToggle: () => void;
   onSelect: () => void;
+  onRemove: () => void;
   onRename: (name: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -845,67 +865,139 @@ function AreaRow(props: {
   }
 
   const h = chipColors(props.ratio);
+  const iconButton: CSSProperties = { width: 34, height: 34, flex: "none", borderRadius: 8, border: `1px solid ${c.line}`, background: c.surface, color: c.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" };
   return (
     <div
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
+        gap: 8,
         padding: "8px 10px",
         borderRadius: 10,
         border: props.selected ? `2px solid ${c.accent}` : `1px solid ${c.line}`,
         background: props.selected ? c.accentSoft : c.surface,
-        opacity: props.visible ? 1 : 0.6,
       }}
     >
-      <input
-        type="checkbox"
-        checked={props.visible}
-        onChange={props.onToggle}
-        aria-label={`Show ${props.name} on the picture`}
-        title={props.visible ? "Shown on the picture: untick to hide" : "Hidden: tick to show on the picture"}
-        style={{ width: 18, height: 18, margin: 0, flex: "none", accentColor: "#2F4BD8", cursor: "pointer" }}
-      />
-      <span style={{ minWidth: 58, textAlign: "center", padding: "3px 8px", borderRadius: 999, fontWeight: 800, fontSize: 13, background: h.bg, color: h.fg }}>
-        {props.value}
-      </span>
+      <span style={{ minWidth: 54, textAlign: "center", padding: "3px 8px", borderRadius: 999, fontWeight: 800, fontSize: 13, background: h.bg, color: h.fg }}>{props.value}</span>
       {editing ? (
         <input
           ref={inputRef}
           value={draft}
-          aria-label="Area name"
+          aria-label="Zone name"
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKey}
           onBlur={commit}
           maxLength={60}
-          style={{ flex: 1, minWidth: 0, minHeight: 36, padding: "0 8px", borderRadius: 8, border: `1px solid ${c.accent}`, background: c.surface, color: c.ink, fontSize: 14 }}
+          style={{ flex: 1, minWidth: 0, minHeight: 34, padding: "0 8px", borderRadius: 8, border: `1px solid ${c.accent}`, background: c.surface, color: c.ink, fontSize: 14 }}
         />
       ) : (
-        <button
-          type="button"
-          onClick={props.onSelect}
-          style={{ flex: 1, minWidth: 0, textAlign: "left", border: 0, background: "transparent", color: c.ink, cursor: "pointer", padding: 0, minHeight: 36 }}
-        >
+        <button type="button" onClick={props.onSelect} style={{ flex: 1, minWidth: 0, textAlign: "left", border: 0, background: "transparent", color: c.ink, cursor: "pointer", padding: 0, minHeight: 34 }}>
           <span style={{ display: "block", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.name}</span>
           {props.suggested && <span style={{ display: "block", fontSize: 12, color: c.muted }}>Suggested: {props.suggested}</span>}
         </button>
       )}
       {!editing && (
-        <button
-          type="button"
-          aria-label={`Rename ${props.name}`}
-          onClick={() => {
-            setDraft(props.name);
-            setEditing(true);
-          }}
-          style={{ width: 36, height: 36, borderRadius: 8, border: `1px solid ${c.line}`, background: c.surface, color: c.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M12 20h9" />
-            <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-          </svg>
-        </button>
+        <>
+          <button
+            type="button"
+            aria-label={`Rename ${props.name}`}
+            onClick={() => {
+              setDraft(props.name);
+              setEditing(true);
+            }}
+            style={iconButton}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+            </svg>
+          </button>
+          <button type="button" aria-label={`Turn ${props.name} off`} onClick={props.onRemove} style={iconButton}>
+            ✕
+          </button>
+        </>
       )}
+    </div>
+  );
+}
+
+type SortKey = "clicks" | "share" | "visits" | "rate" | "exposure" | "conversion";
+
+/** The clicked elements of the page, sortable; "Show" turns one into a zone on the picture. */
+function TopTable(props: {
+  map: Snapshot["map"];
+  matching: ReturnType<typeof matchClicks>;
+  scroll: ScrollDepth | null;
+  pageVisits: number;
+  conversions: ReturnType<typeof matchConversions> | null;
+  goalLabel: string | null;
+  nameOf: (i: number) => string;
+  onShow: (i: number) => void;
+}) {
+  const [sort, setSort] = usePersistentState<SortKey>("fp.tableSort", "clicks");
+  const rows = Array.from(props.matching.byElement.values()).map((m) => {
+    const box = props.map.elements[m.index].box;
+    const exposure = exposureOf(props.scroll, box);
+    const seen = exposure !== null ? exposure * props.pageVisits : props.pageVisits;
+    const conv = props.conversions?.get(m.index);
+    return {
+      i: m.index,
+      name: props.nameOf(m.index),
+      clicks: m.clicks,
+      share: props.matching.totalClicks ? m.clicks / props.matching.totalClicks : 0,
+      visits: m.visits,
+      rate: seen > 0 ? Math.min(1, m.visits / seen) : null,
+      exposure,
+      conversion: conv && conv.visits ? conv.converted / conv.visits : null,
+    };
+  });
+  rows.sort((a, b) => ((b[sort] as number | null) ?? -1) - ((a[sort] as number | null) ?? -1));
+  const cols: { key: SortKey; label: string; show: boolean; fmt: (r: (typeof rows)[number]) => string }[] = [
+    { key: "clicks", label: "Clicks", show: true, fmt: (r) => formatInt(r.clicks) },
+    { key: "share", label: "Click share", show: true, fmt: (r) => formatShare(r.share) },
+    { key: "visits", label: "Visits clicking", show: true, fmt: (r) => formatInt(r.visits) },
+    { key: "rate", label: "Click rate", show: !!props.scroll, fmt: (r) => formatShare(r.rate) },
+    { key: "exposure", label: "Exposure", show: !!props.scroll, fmt: (r) => formatShare(r.exposure) },
+    { key: "conversion", label: "Conversion", show: !!props.goalLabel, fmt: (r) => formatShare(r.conversion) },
+  ];
+  const shown = cols.filter((col) => col.show);
+  const cell: CSSProperties = { padding: "8px 10px", borderBottom: `1px solid ${c.line}`, textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" };
+  if (rows.length === 0) return <div style={{ color: c.muted }}>Nobody clicked on this page in the selected period.</div>;
+  return (
+    <div style={{ overflowX: "auto", border: `1px solid ${c.line}`, borderRadius: 10 }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+        <thead>
+          <tr>
+            <th style={{ ...cell, textAlign: "left" }}>Element</th>
+            {shown.map((col) => (
+              <th key={col.key} style={cell} aria-sort={sort === col.key ? "descending" : "none"}>
+                <button type="button" onClick={() => setSort(col.key)} style={{ border: 0, background: "transparent", color: sort === col.key ? c.accent : c.ink, fontWeight: 700, cursor: "pointer", padding: 0 }}>
+                  {col.label}
+                  {sort === col.key ? " ▾" : ""}
+                </button>
+              </th>
+            ))}
+            <th style={cell} />
+          </tr>
+        </thead>
+        <tbody>
+          {rows.slice(0, 200).map((r) => (
+            <tr key={r.i}>
+              <td style={{ ...cell, textAlign: "left", whiteSpace: "normal", maxWidth: 360 }}>{r.name}</td>
+              {shown.map((col) => (
+                <td key={col.key} style={{ ...cell, fontWeight: sort === col.key ? 700 : 400 }}>
+                  {col.fmt(r)}
+                </td>
+              ))}
+              <td style={cell}>
+                <button type="button" onClick={() => props.onShow(r.i)} style={{ ...pillButton, minHeight: 30 }}>
+                  Show
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
