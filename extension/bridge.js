@@ -77,6 +77,12 @@
       return;
     }
 
+    if (data.type === "auto-snapshot") {
+      const res = await background({ type: "footprints:auto", payload: data.payload });
+      reply({ type: "auto-done", requestId: data.requestId, ok: !!res.ok, pending: !!res.pending, error: res.ok ? null : res.error || null });
+      return;
+    }
+
     if (data.type === "snapshot-saved" && waiting.has(data.deliveryId)) {
       waiting.get(data.deliveryId)({ ok: !!data.ok, error: data.error || null, documentId: data.documentId || null });
     }
@@ -84,6 +90,10 @@
 
   try {
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (message && message.type === "footprints:auto-progress") {
+        reply({ type: "auto-progress", text: message.text });
+        return false;
+      }
       if (!message || message.type !== "footprints:deliver-snapshot") return false;
       handToApp(message.snapshot, message.deliveryId).then(sendResponse);
       return true;

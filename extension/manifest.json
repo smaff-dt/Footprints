@@ -1,10 +1,18 @@
 {
   "manifest_version": 3,
   "name": "Footprints",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Shows on the live page which areas your visitors see and click, and saves page snapshots to the Footprints app for Dynatrace.",
-  "permissions": ["scripting", "storage", "unlimitedStorage", "clipboardRead"],
-  "host_permissions": ["<all_urls>"],
+  "permissions": [
+    "scripting",
+    "storage",
+    "unlimitedStorage",
+    "clipboardRead",
+    "debugger"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js"
   },
@@ -24,8 +32,13 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["panel.html", "panel.js"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "panel.html",
+        "panel.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
   "content_scripts": [
@@ -36,7 +49,9 @@
         "http://localhost/*",
         "http://127.0.0.1/*"
       ],
-      "js": ["bridge.js"],
+      "js": [
+        "bridge.js"
+      ],
       "all_frames": true,
       "match_origin_as_fallback": true,
       "run_at": "document_start"

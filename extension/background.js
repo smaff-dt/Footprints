@@ -4,6 +4,10 @@
  * - Opens a page for the Footprints app and draws the overlay on it once it
  *   has loaded (the data is kept per tab, so a reload draws it again).
  * - Takes the pictures the overlay needs for a snapshot.
+ * - Takes automatic snapshots: loads the page in a background tab at a
+ *   desktop or mobile width (through Chrome's debugging interface, which also
+ *   gives a full-page picture), and measures where the clicked elements are
+ *   at the widths visitors use most.
  * - Delivers snapshots back to the Footprints tab that opened the page. If
  *   that tab is gone, the snapshot is kept and delivered the next time
  *   Footprints is opened.
@@ -17,6 +21,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message.type !== "string") return false;
   const handlers = {
     "footprints:open": () => openWithOverlay(message.payload, sender),
+    "footprints:auto": () => autoSnapshot(message.payload, sender),
     "footprints:draw-on-tab": () => drawFromPopup(message.tabId, message.payload),
     "footprints:capture": () => captureVisible(sender),
     "footprints:snapshot": () => deliverSnapshot(message.snapshot, sender),
@@ -87,10 +92,14 @@ function newId() {
 }
 
 async function deliverSnapshot(snapshot, sender) {
-  if (!snapshot || snapshot.kind !== "footprints-snapshot") throw new Error("This is not a Footprints snapshot.");
-  const deliveryId = newId();
   const stored = sender.tab ? await chrome.storage.session.get(OPENER(sender.tab.id)) : {};
   const opener = sender.tab ? stored[OPENER(sender.tab.id)] : null;
+  return deliverTo(opener, snapshot);
+}
+
+async function deliverTo(opener, snapshot) {
+  if (!snapshot || snapshot.kind !== "footprints-snapshot") throw new Error("This is not a Footprints snapshot.");
+  const deliveryId = newId();
   if (opener) {
     try {
       const res = await chrome.tabs.sendMessage(
@@ -134,4 +143,141 @@ async function removePending(deliveryId) {
   const list = (stored[PENDING] || []).filter((e) => e.deliveryId !== deliveryId);
   await chrome.storage.local.set({ [PENDING]: list });
   return {};
+}
+
+// ── Automatic snapshots ───────────────────────────────────────────────────
+
+const IPHONE_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function progress(opener, text) {
+  if (!opener) return;
+  chrome.tabs.sendMessage(opener.tabId, { type: "footprints:auto-progress", text }, { frameId: opener.frameId }).catch(() => {});
+}
+
+async function waitForLoad(tabId, timeoutMs) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.status === "complete" && tab.url && !tab.url.startsWith("about:")) return;
+    await sleep(300);
+  }
+  throw new Error("The page took too long to load.");
+}
+
+/** Runs a function of the overlay's automatic API in the tab and returns its result. */
+async function inTab(tabId, name, arg) {
+  const [res] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: async (fn, a) => {
+      try {
+        return { ok: true, value: await window.__footprints.auto[fn](a) };
+      } catch (err) {
+        return { ok: false, error: String(err && err.message ? err.message : err) };
+      }
+    },
+    args: [name, arg === undefined ? null : arg],
+  });
+  if (!res || !res.result) throw new Error("The page did not answer.");
+  if (!res.result.ok) throw new Error(res.result.error);
+  return res.result.value;
+}
+
+/**
+ * payload.capture = { device: "desktop" | "mobile", width, height, widths: [numbers] }
+ * widths: other window widths visitors use, where the clicked elements are measured.
+ */
+async function autoSnapshot(payload, sender) {
+  if (!payload || typeof payload.url !== "string" || !/^https?:\/\//i.test(payload.url)) {
+    throw new Error("The page address is missing or is not a web address.");
+  }
+  const cap = payload.capture || {};
+  const mobile = cap.device === "mobile";
+  const width = Math.round(cap.width || (mobile ? 390 : 1440));
+  const height = Math.round(cap.height || (mobile ? 844 : 900));
+  const opener = sender.tab ? { tabId: sender.tab.id, frameId: sender.frameId || 0 } : null;
+
+  progress(opener, "Opening the page in the background…");
+  const tab = await chrome.tabs.create({ url: "about:blank", active: false, ...(sender.tab ? { windowId: sender.tab.windowId } : {}) });
+  const target = { tabId: tab.id };
+  let attached = false;
+  try {
+    await chrome.debugger.attach(target, "1.3");
+    attached = true;
+    const send = (method, params) => chrome.debugger.sendCommand(target, method, params || {});
+    const metrics = (w, h) => send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: mobile ? 2 : 1, mobile });
+    await send("Page.enable");
+    await send("Emulation.setFocusEmulationEnabled", { enabled: true }).catch(() => {});
+    if (mobile) {
+      await send("Emulation.setUserAgentOverride", { userAgent: IPHONE_UA, platform: "iPhone" });
+      await send("Emulation.setTouchEmulationEnabled", { enabled: true, maxTouchPoints: 5 });
+    }
+    await metrics(width, height);
+    await send("Page.navigate", { url: payload.url });
+    await waitForLoad(tab.id, 45000);
+    await sleep(2500); // content often keeps loading after "complete"
+
+    progress(opener, "Reading the page…");
+    await chrome.scripting.executeScript({ target, files: ["overlay.js"] });
+    await inTab(tab.id, "prepare", payload);
+    // Lazy content: make every part of the page "on screen" for a moment, then scroll through it.
+    let size = await inTab(tab.id, "size");
+    await metrics(width, Math.max(height, Math.min(size.h, 16000)));
+    await sleep(1500);
+    await metrics(width, height);
+    await sleep(500);
+    size = await inTab(tab.id, "preload");
+    await inTab(tab.id, "prepare", payload);
+
+    progress(opener, "Taking the picture…");
+    await inTab(tab.id, "hideFloating");
+    const map = await inTab(tab.id, "map");
+    size = await inTab(tab.id, "size");
+    // Mobile pictures at twice the size, as on a phone screen, unless the page is very long.
+    const dpr = mobile ? 2 : 1;
+    const scale = mobile && size.h * 2 <= 16000 ? 2 : 1;
+    const shot = await send("Page.captureScreenshot", {
+      format: "jpeg",
+      quality: 82,
+      captureBeyondViewport: true,
+      clip: { x: 0, y: 0, width: size.w, height: size.h, scale: scale / dpr },
+    });
+    await inTab(tab.id, "restoreFloating");
+
+    // Where the clicked elements are at the widths visitors use.
+    const layouts = [await inTab(tab.id, "measure")];
+    const others = (cap.widths || []).filter((w) => Math.abs(w - width) > Math.max(8, width * 0.01)).slice(0, 6);
+    for (const [i, w] of others.entries()) {
+      progress(opener, `Measuring the page at ${w} px (${i + 1} of ${others.length})…`);
+      await metrics(Math.round(w), height);
+      await sleep(900);
+      layouts.push(await inTab(tab.id, "measure"));
+    }
+
+    const snapshot = {
+      kind: "footprints-snapshot",
+      v: 1,
+      app: payload.app,
+      appId: payload.appId || payload.app,
+      page: payload.page,
+      url: size.url,
+      title: size.title,
+      device: mobile ? "mobile" : "desktop",
+      viewport: { w: width, h: height },
+      capturedAt: new Date().toISOString(),
+      truncated: size.truncated,
+      image: { dataUrl: `data:image/jpeg;base64,${shot.data}`, width: Math.round(size.w * scale), height: Math.round(size.h * scale), scale },
+      map,
+      layouts,
+      capture: "auto",
+      names: {},
+    };
+    progress(opener, "Saving the snapshot…");
+    const delivered = await deliverTo(opener, snapshot);
+    return { ...delivered, layouts: layouts.length };
+  } finally {
+    if (attached) await chrome.debugger.detach(target).catch(() => {});
+    await chrome.tabs.remove(tab.id).catch(() => {});
+  }
 }

@@ -1,0 +1,61 @@
+"""Automatic snapshots with the real extension: the app asks for a desktop and a
+mobile snapshot; the extension loads the page in a background tab, takes a
+full-page picture without the cookie bar, and measures the clicked elements at
+other widths (the product grid changes from 5 to 4 to 2 columns)."""
+import base64, functools, http.server, json, pathlib, tempfile, threading
+from playwright.sync_api import sync_playwright
+
+HERE = pathlib.Path(__file__).parent
+EXT = str(HERE.parent.parent / "extension")
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(HERE))
+handler.func.log_message = lambda *a, **k: None
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 8126), handler)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+from run import shop, payload
+
+data = payload(shop)
+data["url"] = "http://localhost:8126/responsive.html"
+data["appId"] = "Astroshop"
+data["pageVisits"] = 40000
+data["scroll"] = None
+data["scrollError"] = None
+
+with sync_playwright() as p:
+    ctx = p.chromium.launch_persistent_context(
+        tempfile.mkdtemp(), headless=True, channel="chromium",
+        args=[f"--disable-extensions-except={EXT}", f"--load-extension={EXT}"],
+        viewport={"width": 1500, "height": 900},
+    )
+    if not ctx.service_workers:
+        ctx.wait_for_event("serviceworker", timeout=10000)
+    app = ctx.new_page()
+    app.goto("http://localhost:8126/fake-app.html")
+    app.wait_for_function("document.getElementById('status').textContent === 'pong'", timeout=5000)
+    app.evaluate("""() => { window.progress = []; window.done = [];
+      window.addEventListener('message', e => { if (e.data && e.data.source === 'footprints-extension') {
+        if (e.data.type === 'auto-progress') window.progress.push(e.data.text);
+        if (e.data.type === 'auto-done') window.done.push(e.data); } }); }""")
+
+    for device, width, widths in [("desktop", 1280, [1280, 1440, 1920, 1366]), ("mobile", 390, [390, 360, 414])]:
+        n = app.evaluate("window.snapshots.length")
+        d = app.evaluate("window.done.length")
+        tabs_before = len(ctx.pages)
+        p_ = dict(data, capture={"device": device, "width": width, "widths": widths})
+        app.evaluate("p => window.postMessage({ source: 'footprints-app', type: 'auto-snapshot', requestId: 'a1', payload: p }, '*')", p_)
+        app.wait_for_function(f"window.done.length > {d}", timeout=90000)
+        res = app.evaluate("window.done[window.done.length - 1]")
+        print(f"[{device}] done:", res.get("ok"), res.get("error") or "")
+        if not res.get("ok"):
+            continue
+        snap = app.evaluate(f"window.snapshots[{n}]")
+        img = base64.b64decode(snap["image"]["dataUrl"].split(",", 1)[1])
+        (HERE / f"auto-{device}.jpg").write_bytes(img)
+        (HERE / f"auto-{device}.json").write_text(json.dumps(snap))
+        print(f"  device {snap['device']}, viewport {snap['viewport']}, image {snap['image']['width']}x{snap['image']['height']} (scale {snap['image']['scale']}), page {snap['map']['page']}")
+        print("  layouts:", [(l["width"], l["page"]["w"], len(l["boxes"])) for l in snap["layouts"]])
+        first_add = [i for i, e in enumerate(snap["map"]["elements"]) if e["name"].startswith("Add")][4]
+        print("  5th 'Add' button at each width:", [(l["width"], l["boxes"].get(str(first_add))) for l in snap["layouts"]])
+        print("  background tab closed:", len(ctx.pages) == tabs_before, "| progress:", app.evaluate("window.progress.slice(-3)"))
+    ctx.close()
+srv.shutdown()

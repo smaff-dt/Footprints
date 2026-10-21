@@ -7,7 +7,8 @@
  * the picture and the map.
  */
 import { CSSProperties, KeyboardEvent, MouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
-import type { Conversion, ElementConversion, HeatCell, PageElement, ScrollDepth, WidthCount } from "../hooks/data";
+import type { ClickPosition, Conversion, ElementConversion, PageElement, ScrollDepth } from "../hooks/data";
+import { HEAT_CELL } from "../dql/queries";
 import { ClickHeatLayer, HeatLegend, ScrollHeatLayer } from "./Heatmaps";
 import { deviceName, formatInt, formatWhen } from "../lib/format";
 import {
@@ -21,6 +22,8 @@ import {
   formatMetric,
   matchClicks,
   matchConversions,
+  layoutsOf,
+  placeClicks,
   MatchedElement,
   reachAt,
   metricValue,
@@ -32,9 +35,7 @@ import { c } from "../theme";
 export type MapMode = "areas" | "clicks" | "scroll";
 
 export interface HeatData {
-  cells: HeatCell[] | null;
-  widths: WidthCount[] | null;
-  range: [number, number];
+  rows: ClickPosition[] | null;
   loading: boolean;
   error: string | null;
 }
@@ -214,15 +215,18 @@ export function SnapshotView(props: {
   if (snapshot.truncated) notes.push("The page is very long: the snapshot stops at 16,000 pixels.");
   if (goal?.error) notes.push(`Could not compute conversions: ${goal.error}`);
 
-  // Click heatmap: only visits whose window was about as wide as the snapshot saw the same layout.
+  // Click heatmap: every click moved onto the snapshot (see placeClicks).
   const heat = props.heat ?? null;
-  const heatClicks = heat?.cells ? heat.cells.reduce((sum, p) => sum + p.clicks, 0) : 0;
-  const widthTotal = heat?.widths ? heat.widths.reduce((sum, w) => sum + w.clicks, 0) : 0;
-  const topWidth = heat?.widths?.[0] ?? null;
-  const inRange = heat?.widths ? heat.widths.filter((w) => w.width >= heat.range[0] && w.width <= heat.range[1]).reduce((sum, w) => sum + w.clicks, 0) : 0;
+  const placed = useMemo(
+    () => (heat?.rows ? placeClicks(map, layoutsOf(snapshot), heat.rows, HEAT_CELL) : null),
+    [heat?.rows, map, snapshot],
+  );
+  const placedTotal = placed ? placed.exact + placed.approx : 0;
   const heatNote =
-    mode === "clicks" && heat && heat.widths && widthTotal > 0 && inRange / widthTotal < 0.5 && topWidth && (topWidth.width < heat.range[0] || topWidth.width > heat.range[1])
-      ? `Only ${pctOf(inRange, widthTotal)} of the clicks come from windows as wide as this snapshot (${snapshot.viewport.w} px). Most come from windows ${formatInt(topWidth.width)} px wide: for a fuller heatmap, take a snapshot in a window of that width.`
+    mode === "clicks" && placed && placedTotal > 0 && placed.approx / placedTotal > 0.5
+      ? snapshot.capture === "auto"
+        ? "Most clicks come from window widths this snapshot was not measured at: their spot within each element is estimated. A new desktop or mobile snapshot measures the widths visitors use now."
+        : "This snapshot was taken by hand, at one window width: for clicks from other widths, the spot within each element is estimated. A desktop or mobile snapshot measures the page at the widths visitors use."
       : null;
 
   const hl = (t: Target | null): Box | null =>
@@ -393,9 +397,12 @@ export function SnapshotView(props: {
             ? "Placing the clicks…"
             : heat.error
               ? `Could not load click positions: ${heat.error}`
-              : `${formatInt(heatClicks)} clicks from visits with a window ${formatInt(heat.range[0])}–${formatInt(heat.range[1])} px wide, so they saw the page laid out like this snapshot${
-                  matching.totalClicks ? ` (${pctOf(heatClicks, matching.totalClicks)} of the page's clicks)` : ""
-                }.`}
+              : placed
+                ? `${formatInt(placedTotal)} clicks placed: ${pctOf(placed.exact, placedTotal)} at their exact spot (the page was measured at the visitor's window width), ${pctOf(
+                    placed.approx,
+                    placedTotal,
+                  )} estimated within their element${placed.unplaced ? ` · ${formatInt(placed.unplaced)} clicks are on elements not on this snapshot` : ""}.`
+                : ""}
         </div>
       )}
       {heatNote && (
@@ -440,7 +447,7 @@ export function SnapshotView(props: {
           }}
         >
           <img src={snapshot.image.dataUrl} alt={`Snapshot of ${snapshot.title || snapshot.url}`} draggable={false} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} />
-          {mode === "clicks" && heat?.cells && <ClickHeatLayer cells={heat.cells} width={W} height={H} />}
+          {mode === "clicks" && placed && <ClickHeatLayer cells={placed.cells} width={W} height={H} />}
           {mode === "scroll" && hasScroll && <ScrollHeatLayer scroll={scroll!} height={H} />}
           {stats
             .filter((s) => mode === "areas" && !hidden.has(s.area.key))

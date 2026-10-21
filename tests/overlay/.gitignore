@@ -2,3 +2,4 @@
 *.jpg
 snapshot.json
 __pycache__/
+auto-*.json

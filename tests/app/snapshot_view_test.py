@@ -17,14 +17,15 @@ elements = [{"xpath": x, "clicks": c, "visits": v, "label": "x"} for x, c, v in 
 elements.append({"xpath": ["html", "body", 'div[@id="__next"]', "div2", "a"], "clicks": 40, "visits": 40, "label": "x"})
 elements.append({"xpath": ['//*[@id="__next"]', "div", "div", "a"], "clicks": 30, "visits": 30, "label": "x"})
 elements.append({"xpath": ["html", "body", "div", "nothing-here"], "clicks": 10, "visits": 10, "label": "x"})
-# Click positions: a cluster on each product button and on the hero button.
-cells = []
+# Click positions, recorded at the snapshot's own width: a cluster on each "Add" and on "Shop now".
+rows = []
 for e in snapshot["map"]["elements"]:
     b = e["box"]
-    if "Add" in e["name"] or "Shop" in e["name"]:
-        for dx in range(-16, 17, 8):
-            for dy in range(-8, 9, 8):
-                cells.append({"x": b["x"] + b["w"] / 2 + dx, "y": b["y"] + b["h"] / 2 + dy, "clicks": 50 if "Shop" in e["name"] else 10})
+    if not e["keys"][0].startswith("[") or not ("Add" in e["name"] or "Shop" in e["name"]):
+        continue
+    for dx in range(-16, 17, 8):
+        for dy in range(-8, 9, 8):
+            rows.append({"xpath": json.loads(e["keys"][0]), "width": snapshot["viewport"]["w"], "x": b["x"] + b["w"] / 2 + dx, "y": b["y"] + b["h"] / 2 + dy, "clicks": 50 if "Shop" in e["name"] else 10})
 conversions = [{"xpath": x, "visits": v, "converted": v // (3 if i % 2 else 8)} for i, (x, c, v) in enumerate(shop)]
 data = {
     "snapshot": snapshot,
@@ -32,8 +33,7 @@ data = {
     "scroll": {"step": 50, "steps": [[900, 20000], [1300, 20000]], "visits": 40000},
     "pageVisits": 40000,
     "device": "desktop",
-    "cells": cells,
-    "widths": [{"width": 1280, "clicks": 30000}, {"width": snapshot["viewport"]["w"], "clicks": 500}],
+    "rows": rows,
     "conversions": conversions,
     "pageConversion": {"visits": 40000, "converted": 4000},
 }
@@ -108,7 +108,7 @@ with sync_playwright() as p:
     print("element card with goal:", pg.inner_text("[role=tooltip]").replace("\n", " · ")[-120:])
     pg.click("text=Click heatmap"); pg.wait_for_timeout(300)
     print("click heatmap: canvas drawn:", pg.evaluate("(() => { const c = document.querySelector('canvas'); if (!c) return false; const d = c.getContext('2d').getImageData(0,0,c.width,c.height).data; let n=0; for (let i=3;i<d.length;i+=4) if (d[i]>0) n++; return n; })()"), "· areas hidden:", pg.locator("[data-area]").count() == 0)
-    print("heatmap notes:", [t[:110] for t in pg.locator("[role=note]").all_inner_texts()])
+    print("heatmap line:", next(l for l in pg.inner_text("body").split("\n") if "clicks placed" in l))
     pg.screenshot(path=str(HERE / "click-heatmap.png"), full_page=True)
     pg.click("text=Scroll heatmap"); pg.wait_for_timeout(200)
     pg.mouse.move(target["x"], target["y"] + 300); pg.wait_for_timeout(150)

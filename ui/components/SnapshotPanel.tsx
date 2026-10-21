@@ -6,7 +6,6 @@ import { useEffect, useMemo, useState } from "react";
 import type { Device, Filters, PageScope } from "../dql/queries";
 import {
   useClickPositions,
-  useClickWidths,
   useElementConversions,
   usePageConversion,
   usePageElements,
@@ -92,15 +91,8 @@ export function SnapshotPanel(props: {
   const pageVisits = snapDevice && snapDevice !== filters.device ? deviceVisits.data ?? 0 : props.pageVisits;
   // Heatmaps and conversions are loaded only when they are shown.
   const [mode, setMode] = usePersistentState<MapMode>("fp.mapMode", "areas");
-  const snapW = snapshot?.viewport?.w ?? 0;
-  const range = useMemo<[number, number] | null>(() => {
-    if (!snapW) return null;
-    const tol = Math.max(40, Math.round(snapW * 0.04));
-    return [snapW - tol, snapW + tol];
-  }, [snapW]);
   const clickTpl = mode === "clicks" ? tpl : null;
-  const widths = useClickWidths(dataFilters, clickTpl, props.refreshKey);
-  const cells = useClickPositions(dataFilters, clickTpl, range, props.refreshKey);
+  const positions = useClickPositions(dataFilters, clickTpl, props.refreshKey);
   const goalScope = props.goal?.scope ?? null;
   const pageConv = usePageConversion(dataFilters, tpl, goalScope, props.refreshKey);
   const elConv = useElementConversions(dataFilters, tpl, goalScope, props.refreshKey);
@@ -188,9 +180,7 @@ export function SnapshotPanel(props: {
           mode={mode}
           onMode={setMode}
           heat={
-            mode === "clicks" && range
-              ? { cells: cells.data, widths: widths.data, range, loading: cells.loading || widths.loading, error: cells.error ?? widths.error }
-              : null
+            mode === "clicks" ? { rows: positions.data, loading: positions.loading, error: positions.error } : null
           }
           goal={
             props.goal

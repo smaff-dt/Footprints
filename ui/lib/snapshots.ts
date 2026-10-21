@@ -62,6 +62,19 @@ export interface Snapshot {
   map: SnapshotMap;
   /** Names given by the user, by area key. */
   names: Record<string, string>;
+  /**
+   * Where the clicked elements are at the window widths visitors use most
+   * (automatic snapshots): map element index → box, in page pixels.
+   */
+  layouts?: Layout[];
+  /** "auto" for desktop and mobile snapshots taken in the background; "custom" otherwise. */
+  capture?: "auto" | "custom";
+}
+
+export interface Layout {
+  width: number;
+  page: { w: number; h: number };
+  boxes: Record<string, Box>;
 }
 
 export interface SnapshotMeta {

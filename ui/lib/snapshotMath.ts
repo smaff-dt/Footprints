@@ -4,7 +4,7 @@
  * scroll-depth distribution, using each area's position on the snapshot.
  */
 import type { PageElement, ScrollDepth } from "../hooks/data";
-import type { Box, MapArea, SnapshotMap } from "./snapshots";
+import type { Box, Layout, MapArea, SnapshotMap } from "./snapshots";
 
 // ── Matching recorded xpaths to the map ──────────────────────────────────────
 
@@ -236,4 +236,115 @@ export function formatMetric(v: number | null, metric: AreaMetric): string {
   const pct = v * 100;
   if (pct > 0 && pct < 0.1) return "<0.1%";
   return `${pct.toFixed(pct >= 10 ? 0 : 1)}%`;
+}
+
+// ── Click heatmap ────────────────────────────────────────────────────────────
+
+export interface PlacedClicks {
+  cells: { x: number; y: number; clicks: number }[];
+  /** Clicks placed using where the element was at the visitor's window width. */
+  exact: number;
+  /** Clicks placed within the element, from how its clicks are spread. */
+  approx: number;
+  /** Clicks on elements that are not on this snapshot. */
+  unplaced: number;
+}
+
+/**
+ * Moves every recorded click onto the snapshot. A click's position is in the
+ * layout the visitor saw, which depends on the window width. If the page was
+ * measured at about that width, the click keeps its exact spot relative to
+ * its element (30% from the left of the button, 60% from its top…), placed on
+ * the same element in the snapshot. Otherwise its spot within the element is
+ * estimated from how the clicks on that element are spread at that width.
+ */
+export function placeClicks(
+  map: SnapshotMap,
+  layouts: Layout[],
+  rows: { xpath: string[]; width: number; x: number; y: number; clicks: number }[],
+  cell: number,
+): PlacedClicks {
+  const index = new Map<string, number>();
+  map.elements.forEach((e, i) => {
+    for (const k of e.keys) if (!index.has(k)) index.set(k, i);
+  });
+  const elementOf = new Map<string, number | null>();
+  const find = (xpath: string[]) => {
+    const key = JSON.stringify(xpath);
+    if (!elementOf.has(key)) elementOf.set(key, keysForXpath(xpath).map((k) => index.get(k)).find((v) => v !== undefined) ?? null);
+    return elementOf.get(key)!;
+  };
+
+  const tolerance = (w: number) => Math.max(16, w * 0.03);
+  const layoutFor = (w: number) => {
+    let best: Layout | null = null;
+    for (const l of layouts) if (Math.abs(l.width - w) <= tolerance(w) && (!best || Math.abs(l.width - w) < Math.abs(best.width - w))) best = l;
+    return best;
+  };
+
+  // Spread of the clicks on each element at each width, for the estimate.
+  const spread = new Map<string, { x0: number; x1: number; y0: number; y1: number }>();
+  for (const r of rows) {
+    const i = find(r.xpath);
+    if (i === null) continue;
+    const k = `${i}|${Math.round(r.width / 8)}`;
+    const s = spread.get(k);
+    const cx = r.x + cell / 2;
+    const cy = r.y + cell / 2;
+    if (!s) spread.set(k, { x0: cx, x1: cx, y0: cy, y1: cy });
+    else {
+      s.x0 = Math.min(s.x0, cx);
+      s.x1 = Math.max(s.x1, cx);
+      s.y0 = Math.min(s.y0, cy);
+      s.y1 = Math.max(s.y1, cy);
+    }
+  }
+
+  const out = new Map<string, { x: number; y: number; clicks: number }>();
+  let exact = 0;
+  let approx = 0;
+  let unplaced = 0;
+  const clamp = (v: number) => Math.max(0, Math.min(1, v));
+  for (const r of rows) {
+    const i = find(r.xpath);
+    if (i === null) {
+      unplaced += r.clicks;
+      continue;
+    }
+    const target = map.elements[i].box;
+    const cx = r.x + cell / 2;
+    const cy = r.y + cell / 2;
+    let rx: number;
+    let ry: number;
+    const layout = layoutFor(r.width);
+    const box = layout ? layout.boxes[String(i)] : undefined;
+    if (box && box.w > 0 && box.h > 0) {
+      rx = clamp((cx - box.x) / box.w);
+      ry = clamp((cy - box.y) / box.h);
+      exact += r.clicks;
+    } else {
+      const s = spread.get(`${i}|${Math.round(r.width / 8)}`)!;
+      rx = s.x1 - s.x0 > 6 ? (cx - s.x0) / (s.x1 - s.x0) : 0.5;
+      ry = s.y1 - s.y0 > 6 ? (cy - s.y0) / (s.y1 - s.y0) : 0.5;
+      approx += r.clicks;
+    }
+    const x = target.x + rx * target.w;
+    const y = target.y + ry * target.h;
+    const k = `${Math.round(x / cell)}|${Math.round(y / cell)}`;
+    const c = out.get(k) ?? { x: Math.round(x / cell) * cell - cell / 2, y: Math.round(y / cell) * cell - cell / 2, clicks: 0 };
+    c.clicks += r.clicks;
+    out.set(k, c);
+  }
+  return { cells: Array.from(out.values()), exact, approx, unplaced };
+}
+
+/** The layouts of a snapshot; one taken by hand has only its own, from the map. */
+export function layoutsOf(snapshot: { viewport: { w: number }; map: SnapshotMap; layouts?: Layout[] }): Layout[] {
+  const own: Layout = {
+    width: snapshot.viewport.w,
+    page: snapshot.map.page,
+    boxes: Object.fromEntries(snapshot.map.elements.map((e, i) => [String(i), e.box])),
+  };
+  const measured = (snapshot.layouts ?? []).filter((l) => Math.abs(l.width - own.width) > 1);
+  return [own, ...measured];
 }

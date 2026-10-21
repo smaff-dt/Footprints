@@ -25,11 +25,16 @@ export interface PagePayload {
   scroll: ScrollDepth | null;
   /** Why scroll depth is missing, when its query failed. */
   scrollError: string | null;
+  /** Automatic snapshots: the kind of device, the window width, and other widths to measure. */
+  capture?: { device: "desktop" | "mobile"; width: number; widths: number[] };
 }
 
 interface ExtensionMessage {
   source: "footprints-extension";
-  type: "pong" | "shown" | "snapshot";
+  type: "pong" | "shown" | "snapshot" | "auto-progress" | "auto-done";
+  version?: string;
+  text?: string;
+  pending?: boolean;
   requestId?: string;
   ok?: boolean;
   error?: string | null;
@@ -73,12 +78,12 @@ function isExtensionMessage(data: unknown): data is ExtensionMessage {
   return !!data && typeof data === "object" && (data as { source?: unknown }).source === "footprints-extension";
 }
 
-/** True once the extension has answered in this frame. */
-export function useExtensionInstalled(): boolean {
-  const [installed, setInstalled] = useState(false);
+/** The extension's version once it has answered in this frame (null until then). */
+export function useExtensionVersion(): string | null {
+  const [version, setVersion] = useState<string | null>(null);
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
-      if (event.source === window && isExtensionMessage(event.data) && event.data.type === "pong") setInstalled(true);
+      if (event.source === window && isExtensionMessage(event.data) && event.data.type === "pong") setVersion(event.data.version || "0");
     };
     window.addEventListener("message", onMessage);
     window.postMessage({ source: "footprints-app", type: "ping" }, "*");
@@ -88,7 +93,70 @@ export function useExtensionInstalled(): boolean {
       window.clearInterval(retry);
     };
   }, []);
-  return installed;
+  return version;
+}
+
+/** True once the extension has answered in this frame. */
+export function useExtensionInstalled(): boolean {
+  return useExtensionVersion() !== null;
+}
+
+/** Version a.b.c is at least min. */
+export function versionAtLeast(version: string | null, min: string): boolean {
+  if (!version) return false;
+  const a = version.split(".").map(Number);
+  const b = min.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+  return true;
+}
+
+/**
+ * Asks the extension for an automatic snapshot: the page is loaded in a
+ * background tab at the chosen device's width, pictured, measured at other
+ * widths, and the snapshot arrives through useSnapshotInbox.
+ */
+export function takeAutoSnapshot(payload: PagePayload, onProgress: (text: string) => void, timeoutMs = 240000): Promise<{ pending: boolean }> {
+  const requestId = `fp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      window.removeEventListener("message", onMessage);
+      reject(new Error("The browser extension did not finish the snapshot in time. Try again, or use “Open the page”."));
+    }, timeoutMs);
+    function onMessage(event: MessageEvent) {
+      if (event.source !== window || !isExtensionMessage(event.data)) return;
+      if (event.data.type === "auto-progress" && event.data.text) onProgress(event.data.text);
+      if (event.data.type !== "auto-done" || event.data.requestId !== requestId) return;
+      window.clearTimeout(timer);
+      window.removeEventListener("message", onMessage);
+      if (event.data.ok) resolve({ pending: false });
+      else if (event.data.pending) resolve({ pending: true });
+      else reject(new Error(event.data.error || "The browser extension could not take the snapshot."));
+    }
+    window.addEventListener("message", onMessage);
+    window.postMessage({ source: "footprints-app", type: "auto-snapshot", requestId, payload }, "*");
+  });
+}
+
+/**
+ * The window widths to use for an automatic snapshot: the most common one
+ * for the device, and others until about 90% of clicks are covered (at most 5).
+ */
+export function planWidths(widths: { width: number; clicks: number }[], device: "desktop" | "mobile"): { main: number; others: number[]; coverage: number } {
+  const fits = (w: number) => (device === "desktop" ? w >= 1024 && w <= 3840 : w >= 280 && w < 768);
+  const list = widths.filter((w) => fits(w.width)).sort((a, b) => b.clicks - a.clicks);
+  const total = list.reduce((s, w) => s + w.clicks, 0);
+  const near = (a: number, b: number) => Math.abs(a - b) <= Math.max(16, b * 0.03);
+  const picked: number[] = [];
+  for (const w of list) {
+    if (picked.length >= 5) break;
+    if (picked.some((p) => near(w.width, p))) continue;
+    picked.push(w.width);
+    const covered = list.filter((x) => picked.some((p) => near(x.width, p))).reduce((s, x) => s + x.clicks, 0);
+    if (total && covered / total >= 0.9) break;
+  }
+  const covered = list.filter((x) => picked.some((p) => near(x.width, p))).reduce((s, x) => s + x.clicks, 0);
+  const main = picked[0] ?? (device === "desktop" ? 1440 : 390);
+  return { main, others: picked.slice(1), coverage: total ? covered / total : 0 };
 }
 
 /** Asks the extension to open the page and draw the clicks on it. */

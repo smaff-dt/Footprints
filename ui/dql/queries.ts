@@ -342,22 +342,22 @@ export function clickWidthsQuery(f: Filters, scope: PageScope): string {
 export const HEAT_CELL = 8;
 
 /**
- * Where on the page clicks happened, in cells of HEAT_CELL pixels, for visits
- * whose window was between `minWidth` and `maxWidth` pixels wide (so they saw
- * about the same layout as the snapshot).
+ * Where on the page clicks happened, per clicked element and browser window
+ * width, in cells of HEAT_CELL pixels. Positions are page coordinates in the
+ * layout the visitor saw; Footprints moves them onto the snapshot using where
+ * the element is at that width.
  */
-export function clickPositionsQuery(f: Filters, scope: PageScope, minWidth: number, maxWidth: number): string {
+export function clickPositionsQuery(f: Filters, scope: PageScope): string {
   return lines(
     `fetch user.events, ${fromClause(f.timeframe)}`,
     appFilter(f.appId),
     CLICKS_ONLY,
     deviceFilter(f.device),
-    `| filter browser.window.width >= ${Math.floor(minWidth)} and browser.window.width <= ${Math.ceil(maxWidth)}`,
     PAGE_FIELDS,
     scopeFilter(scope),
     POSITION_XY,
     "| filter isNotNull(pos_x) and isNotNull(pos_y)",
-    `| summarize clicks = count(), by: {x = bin(toDouble(pos_x), ${HEAT_CELL}), y = bin(toDouble(pos_y), ${HEAT_CELL})}`,
+    `| summarize clicks = count(), by: {section = toString(ui_element.xpath), width = browser.window.width, x = bin(toDouble(pos_x), ${HEAT_CELL}), y = bin(toDouble(pos_y), ${HEAT_CELL})}`,
     "| sort clicks desc",
     "| limit 5000",
   );

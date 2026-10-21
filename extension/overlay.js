@@ -836,6 +836,7 @@
   // ── Full render (on data, detail or layout changes) ───────────────────────
 
   function render() {
+    if (state.auto) return;
     if (!state.payload) return;
     ensureHost();
     buildAreas();
@@ -1062,6 +1063,9 @@
     };
   }
 
+  /** DOM elements behind the last map, for measuring them again at other widths. */
+  let lastMap = { els: [], rows: [] };
+
   function buildMap(pageHeight) {
     const total = pageArea();
     const cache = new Map();
@@ -1078,6 +1082,8 @@
       return areaIds.get(el);
     };
     const elements = [];
+    const els = [];
+    const rows = [];
     const byEl = new Map();
     const add = (el, rawKey) => {
       if (el === document.body || el === document.documentElement || (host && host.contains(el))) return;
@@ -1098,8 +1104,14 @@
       };
       byEl.set(el, item);
       elements.push(item);
+      els.push(el);
+      rows.push(null);
     };
-    for (const f of state.found) add(f.el, JSON.stringify(f.row.xpath));
+    for (const f of state.found) {
+      add(f.el, JSON.stringify(f.row.xpath));
+      const i = els.indexOf(f.el);
+      if (i >= 0 && !rows[i]) rows[i] = f.row.xpath;
+    }
     for (const el of document.querySelectorAll(CLICKABLE)) add(el, null);
     // Texts and pictures too, clicked or not, so any of them can be selected in Footprints.
     for (const el of document.body.querySelectorAll("*")) {
@@ -1112,6 +1124,7 @@
     }
     uniqueNames(areas.map((a) => [a, areaName(a._el, ctx, false)]));
     areas.forEach((a) => delete a._el);
+    lastMap = { els, rows };
     return {
       areas,
       elements,
@@ -1282,7 +1295,7 @@
   function schedule() {
     clearTimeout(timer);
     timer = setTimeout(() => {
-      if (!state.payload || (state.saving && state.saving.kind === "busy")) return;
+      if (!state.payload || state.auto || (state.saving && state.saving.kind === "busy")) return;
       locate();
       render();
     }, 600);
@@ -1323,8 +1336,78 @@
     setTimeout(schedule, 1500);
   }
 
+  // ── Automatic snapshots ───────────────────────────────────────────────────
+  //
+  // Driven by the extension's background worker, which loads the page in a
+  // background tab at a chosen width and takes the picture itself. Here we
+  // only find elements, build the map, hide floating bars, and measure where
+  // the clicked elements are at other widths.
+
+  const floating = [];
+  const auto = {
+    prepare(payload) {
+      state.auto = true; // nothing is drawn on the page
+      state.payload = payload;
+      locate();
+      state.detail = startingDetail();
+      return { found: state.found.length, missing: state.missing.length };
+    },
+    async preload() {
+      // Go through the page once so lazy content loads, then back to the top.
+      const doc = document.documentElement;
+      const fullH = () => Math.min(Math.max(doc.scrollHeight, document.body.scrollHeight), MAX_PAGE_HEIGHT);
+      for (let y = 0; y < fullH(); y += Math.round(window.innerHeight * 0.8)) {
+        window.scrollTo(0, y);
+        await wait(120);
+      }
+      window.scrollTo(0, 0);
+      await wait(500);
+      return auto.size();
+    },
+    size() {
+      const doc = document.documentElement;
+      const full = Math.max(doc.scrollHeight, document.body.scrollHeight);
+      return { w: doc.clientWidth, h: Math.min(full, MAX_PAGE_HEIGHT), truncated: full > MAX_PAGE_HEIGHT, viewW: window.innerWidth, viewH: window.innerHeight, title: document.title, url: location.href };
+    },
+    /** Hides bars stuck to the bottom or the sides (cookie banners, chat buttons): they would cover the page. */
+    hideFloating() {
+      for (const el of fixedElements()) {
+        const r = el.getBoundingClientRect();
+        if (r.top < 120 && r.height < window.innerHeight * 0.5) continue; // a header at the top stays
+        floating.push([el, el.style.getPropertyValue("visibility"), el.style.getPropertyPriority("visibility")]);
+        el.style.setProperty("visibility", "hidden", "important");
+      }
+      return floating.length;
+    },
+    restoreFloating() {
+      for (const [el, value, priority] of floating.splice(0)) {
+        if (value) el.style.setProperty("visibility", value, priority);
+        else el.style.removeProperty("visibility");
+      }
+    },
+    map() {
+      locate();
+      return buildMap(auto.size().h);
+    },
+    /** Where each clicked element of the last map is at the current width. */
+    measure() {
+      const boxes = {};
+      lastMap.rows.forEach((xpath, i) => {
+        if (!xpath) return;
+        let el = lastMap.els[i];
+        if (!el || !el.isConnected) el = findElement(xpath);
+        if (!el || el.getClientRects().length === 0) return;
+        const b = round(pageBox(el));
+        if (b.w >= 1 && b.h >= 1) boxes[i] = b;
+      });
+      const size = auto.size();
+      return { width: size.viewW, page: { w: size.w, h: size.h }, boxes };
+    },
+  };
+
   window.__footprints = {
     show,
+    auto,
     findElement,
     readSegment,
     canonicalKeys,

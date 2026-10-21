@@ -19,6 +19,19 @@ It reads the user interactions captured by Dynatrace Real User Monitoring
 
 ## How it works
 
+### Taking a snapshot
+
+| Option | How |
+|---|---|
+| **Desktop snapshot** | Automatic. The extension loads the page in a background tab at the window width most desktop visitors use, takes a full-page picture (bars stuck to the bottom, such as cookie banners, are hidden), and measures where every clicked element is at the other common widths (up to 5, covering about 90% of clicks). |
+| **Mobile snapshot** | The same, with the page loaded as a phone shows it (phone width and browser identity), using mobile visits only. |
+| **Open the page** | Manual. The live page opens with the clicks drawn on it; resize the window, accept cookies, open menus, then click **Save snapshot to Footprints**. |
+
+While an automatic snapshot is taken (a few seconds), Chrome shows a bar
+saying Footprints is debugging the browser: the extension uses Chrome's
+debugging interface to load the page at a given width without touching your
+window. The background tab closes by itself.
+
 1. **In Footprints**, choose an application and a page (or a page group),
    then click **Show on the page**.
 2. **On the page** that opens, the extension divides the page into areas
@@ -65,7 +78,7 @@ Dynatrace and follow you across browsers.
 | View | What it shows |
 |---|---|
 | **Areas** | Areas colored by the metric chosen in **Show**; any element can be pointed at or selected |
-| **Click heatmap** | Where visitors click, from the exact click positions recorded by Dynatrace. Only visits whose browser window was about as wide as the snapshot's (±4%) are used, since they saw the same layout; Footprints says how many clicks that is and suggests the most common width when it differs |
+| **Click heatmap** | Where visitors click, from the click positions recorded by Dynatrace. A position belongs to the layout the visitor saw, which depends on the window width; each click is moved onto the same element of the snapshot, at the same spot within it (30% from its left, 60% from its top…) when the page was measured at that width, or estimated from how the element's clicks are spread otherwise. Footprints says how many clicks were placed exactly |
 | **Scroll heatmap** | The page colored by the share of visits that get down to each height (red: everyone, blue: few); point anywhere to read the share |
 
 ### Conversions
@@ -171,7 +184,11 @@ built with components; the page map works on any site.
 | `storage:buckets:read` | Required with the table permission to read Grail |
 | `storage:entities:read` | Application names on older environments |
 | `document:documents:read` | Read your page snapshots |
-| `document:documents:write` | Save page snapshots and area names |
+| `document:documents:write` | Save page snapshots, area names and page groups |
+
+The browser extension asks for: access to web pages (to read and picture the
+page you analyse), `scripting`, `storage`, and `debugger` (automatic
+snapshots at a chosen width, in a background tab).
 
 ## Develop and deploy
 
@@ -222,8 +239,11 @@ ui/
 - Elements not on screen when the snapshot is taken (closed menus, pop-ups)
   are not on the map; their clicks count as "not on this snapshot".
 - Pages longer than 16,000 pixels are cut at that height.
-- Snapshots follow the window width: for a mobile snapshot, open the page in
-  a narrow window or in the browser's device mode.
+- Automatic snapshots do not accept cookie banners or open menus: use
+  **Open the page** for that. Pages behind a login work if your browser is
+  logged in.
+- Opening a page (automatically or by hand) counts as a visit in the site's
+  own analytics.
 - "Visits" are RUM sessions.
 - Pages are opened at an address seen in the data: pages that need a login or
   the company network open only if your browser can reach them.
@@ -240,7 +260,10 @@ python3 tests/overlay/autodetail_test.py # pictures named from their card; sensi
 python3 tests/overlay/e2e.py             # real extension: app → page → isolated panel → snapshot back to the app
 python3 tests/overlay/capture_test.py    # long page with sticky header and cookie bar stitched cleanly
 python3 tests/overlay/frame_test.py      # extension reached from sandboxed frames like the Dynatrace app
+python3 tests/overlay/auto_test.py       # automatic desktop and mobile snapshots, measured at other widths
 # app page map, rendered outside Dynatrace with the snapshot from e2e.py:
 node_modules/.bin/esbuild tests/app/harness.tsx --bundle --outfile=tests/app/harness.js --format=iife --jsx=automatic
 python3 tests/app/snapshot_view_test.py
+# clicks from other window widths placed on the right element (uses auto_test.py's output):
+node_modules/.bin/esbuild tests/app/place_test.ts --bundle --platform=node --format=esm --outfile=/tmp/place.mjs && node /tmp/place.mjs
 ```

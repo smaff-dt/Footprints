@@ -7,7 +7,7 @@
   "app": {
     "id": "my.footprints",
     "name": "Footprints",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "icon": "./icon.svg",
     "description": "See which parts of a page your visitors click, use and ignore.",
     "scopes": [

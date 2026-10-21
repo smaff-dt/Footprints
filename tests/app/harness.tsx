@@ -10,7 +10,7 @@ import type { Snapshot } from "../../ui/lib/snapshots";
 
 declare global {
   interface Window {
-    __data: { snapshot: Snapshot; elements: any[]; scroll: any; pageVisits: number; device: string; cells?: any[]; widths?: any[]; conversions?: any[]; pageConversion?: any };
+    __data: { snapshot: Snapshot; elements: any[]; scroll: any; pageVisits: number; device: string; rows?: any[]; conversions?: any[]; pageConversion?: any };
     renamed: [string, string][];
   }
 }
@@ -19,7 +19,6 @@ const d = window.__data;
 window.renamed = [];
 function App() {
   const [mode, setMode] = useState<MapMode>("areas");
-  const w = d.snapshot.viewport.w;
   return (
     <div style={{ padding: 24, maxWidth: 1400, margin: "0 auto" }}>
       <style>{GLOBAL_CSS}</style>
@@ -33,7 +32,7 @@ function App() {
         onRename={(k, n) => window.renamed.push([k, n])}
         mode={mode}
         onMode={setMode}
-        heat={mode === "clicks" ? { cells: d.cells ?? [], widths: d.widths ?? [], range: [w - 58, w + 58], loading: false, error: null } : null}
+        heat={mode === "clicks" ? { rows: d.rows ?? [], loading: false, error: null } : null}
         goal={d.conversions ? { label: "Checkout", page: d.pageConversion, elements: d.conversions, loading: false, error: null } : null}
       />
     </div>

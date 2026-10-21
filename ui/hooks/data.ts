@@ -228,17 +228,42 @@ export interface HeatCell {
   clicks: number;
 }
 
-function mapCells(rows: Row[]): HeatCell[] {
-  return rows.map((r) => ({ x: num(r["x"]), y: num(r["y"]), clicks: num(r["clicks"]) })).filter((c) => c.clicks > 0);
+/** Clicks on one element, at one window width, in one cell of the page. */
+export interface ClickPosition {
+  xpath: string[];
+  width: number;
+  x: number;
+  y: number;
+  clicks: number;
 }
 
-export function useClickPositions(
-  filters: Filters | null,
-  scope: PageScope | null,
-  widths: [number, number] | null,
-  refreshKey: number,
-): QueryState<HeatCell[]> {
-  return useQuery(filters && scope && widths ? clickPositionsQuery(filters, scope, widths[0], widths[1]) : null, mapCells, refreshKey);
+function mapPositions(rows: Row[]): ClickPosition[] {
+  const out: ClickPosition[] = [];
+  const parsed = new Map<string, string[] | null>();
+  for (const r of rows) {
+    const key = str(r["section"]);
+    if (!parsed.has(key)) {
+      try {
+        const v = JSON.parse(key);
+        parsed.set(key, Array.isArray(v) && v.length ? v.map(String) : null);
+      } catch {
+        parsed.set(key, null);
+      }
+    }
+    const xpath = parsed.get(key);
+    if (!xpath) continue;
+    out.push({ xpath, width: num(r["width"]), x: num(r["x"]), y: num(r["y"]), clicks: num(r["clicks"]) });
+  }
+  return out;
+}
+
+export function useClickPositions(filters: Filters | null, scope: PageScope | null, refreshKey: number): QueryState<ClickPosition[]> {
+  return useQuery(filters && scope ? clickPositionsQuery(filters, scope) : null, mapPositions, refreshKey);
+}
+
+/** Window widths covering most clicks, for measuring the page at them (most used first). */
+export async function loadClickWidths(filters: Filters, scope: PageScope): Promise<WidthCount[]> {
+  return mapWidths(await runQuery(clickWidthsQuery(filters, scope)));
 }
 
 // ── Conversions ──────────────────────────────────────────────────────────────

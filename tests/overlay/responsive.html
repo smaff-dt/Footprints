@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Shop (responsive)</title>
+<style>
+body{margin:0;font-family:Arial,sans-serif}
+.top{display:flex;justify-content:space-between;align-items:center;padding:16px 40px;background:#111;color:#fff}
+.top a{color:#fff;margin-left:16px}
+.hero{height:260px;background:#e8e2d6;display:flex;align-items:center;padding:0 40px}
+.grid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;padding:24px 40px;max-width:1200px;margin:0 auto}
+@media (max-width:1300px){.grid{grid-template-columns:repeat(4,1fr)}}
+@media (max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:600px){.grid{grid-template-columns:1fr}.hero{height:70vh}}
+.cookie{position:fixed;left:0;right:0;bottom:0;padding:18px 40px;background:#2F4BD8;color:#fff;z-index:9}
+.prod{border:1px solid #ddd;border-radius:8px;padding:12px;height:220px}
+.foot{padding:30px 40px;background:#222;color:#ccc;margin-top:20px}
+</style></head>
+<body>
+<div id="__next">
+  <div class="top"><span>Astroshop</span><div><a href="#">Cart</a><a href="#">Account</a></div></div>
+  <main>
+    <div class="hero"><div><h1>Telescopes for everyone</h1><button type="button">Shop now</button></div></div>
+    <div><h2 style="padding:0 40px">Hot products</h2>
+      <div class="grid">
+        <div class="prod">Product 1<br><button type="button">Add</button></div>
+        <div class="prod">Product 2<br><button type="button">Add</button></div>
+        <div class="prod">Product 3<br><button type="button">Add</button></div>
+        <div class="prod">Product 4<br><button type="button">Add</button></div>
+        <div class="prod">Product 5<br><button type="button">Add</button></div>
+        <div class="prod">Product 6<br><button type="button">Add</button></div>
+        <div class="prod">Product 7<br><button type="button">Add</button></div>
+        <div class="prod">Product 8<br><button type="button">Add</button></div>
+        <div class="prod">Product 9<br><button type="button">Add</button></div>
+        <div class="prod">Product 10<br><button type="button">Add</button></div>
+      </div>
+    </div>
+  </main>
+  <div class="foot">© Astroshop · <a href="#">Privacy</a></div>
+</div>
+<div class="cookie">We use cookies <button type="button">OK</button></div>
+<script>document.body.dataset.ua = navigator.userAgent.includes("iPhone") ? "phone" : "computer"</script>
+</body></html>
