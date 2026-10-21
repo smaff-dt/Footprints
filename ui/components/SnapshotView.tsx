@@ -33,7 +33,8 @@ import {
 import type { Box, Snapshot } from "../lib/snapshots";
 import { c } from "../theme";
 
-export type MapMode = "areas" | "clicks" | "scroll";
+/** Zones, any element, or a heatmap (read through its colors only). */
+export type MapMode = "areas" | "elements" | "clicks" | "scroll";
 
 export interface HeatData {
   rows: ClickPosition[] | null;
@@ -126,6 +127,11 @@ export function SnapshotView(props: {
   // A new snapshot or new data: start again from a sensible detail level.
   useEffect(() => setDetail(startingDetail(map, matching)), [map, matching]);
   useEffect(() => setPinned((p) => (p && p.kind === "area" ? null : p)), [detail]);
+  // Each view has its own things to select.
+  useEffect(() => {
+    setPinned(null);
+    setHover(null);
+  }, [mode]);
   const metricOptions = AREA_METRICS.filter((m) => (hasScroll || !m.needsScroll) && (conversions || !m.needsGoal));
   const activeMetric: AreaMetric = metricOptions.some((m) => m.value === metric) ? metric : "share";
 
@@ -167,14 +173,19 @@ export function SnapshotView(props: {
     return groups;
   }, [hasScroll, scroll, H]);
 
-  /** The smallest element of the page under the pointer, clicked or not; else the smallest area. */
+  /**
+   * What the pointer is on: in the Zones view, the smallest zone; in the
+   * Elements view, the smallest element of the page, clicked or not. Heatmaps
+   * are read through their colors only: nothing to point at.
+   */
   function targetAt(e: MouseEvent<HTMLDivElement>): Target | null {
+    if (mode !== "areas" && mode !== "elements") return null;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * W;
     const y = ((e.clientY - rect.top) / rect.height) * H;
     let best = -1;
     let bestSize = Infinity;
-    map.elements.forEach((el, i) => {
+    if (mode === "elements") map.elements.forEach((el, i) => {
       if (!contains(el.box, x, y)) return;
       const size = el.box.w * el.box.h;
       if (size < bestSize) {
@@ -182,7 +193,7 @@ export function SnapshotView(props: {
         bestSize = size;
       }
     });
-    if (best >= 0) return { kind: "element", index: best };
+    if (mode === "elements") return best >= 0 ? { kind: "element", index: best } : null;
     let area: AreaStat | null = null;
     for (const s of stats) if (!hidden.has(s.area.key) && contains(s.area.box, x, y) && (!area || s.area.box.w * s.area.box.h < area.area.box.w * area.area.box.h)) area = s;
     return area ? { kind: "area", id: area.area.id } : null;
@@ -294,7 +305,8 @@ export function SnapshotView(props: {
           <div role="radiogroup" aria-label="View" style={{ display: "flex", padding: 3, borderRadius: 12, background: c.surfaceAlt, border: `1px solid ${c.line}` }}>
             {(
               [
-                ["areas", "Areas"],
+                ["areas", "Zones"],
+                ["elements", "Elements"],
                 ["clicks", "Click heatmap"],
                 ["scroll", "Scroll heatmap"],
               ] as [MapMode, string][]
@@ -353,12 +365,13 @@ export function SnapshotView(props: {
             style={{ width: 140, accentColor: "#2F4BD8" }}
           />
         </label>
-        <Toggle label="Clicked elements" checked={showDots} onChange={setShowDots} />
         </>
         )}
+        {mode === "elements" && <Toggle label="Mark clicked elements" checked={showDots} onChange={setShowDots} />}
         {mode === "clicks" && <HeatLegend low="Fewer clicks" high="More clicks" />}
         {mode === "scroll" && <HeatLegend low="Few visits get here" high="All visits" />}
         {hasScroll && mode !== "clicks" && <Toggle label="Scroll lines" checked={showLines} onChange={setShowLines} />}
+        {mode === "areas" && (
         <button
           type="button"
           onClick={() => setSidebar(!sidebar)}
@@ -375,14 +388,16 @@ export function SnapshotView(props: {
             cursor: "pointer",
           }}
         >
-          {sidebar ? "Hide areas" : "Show areas"}
+          {sidebar ? "Hide zone list" : "Zone list"}
         </button>
+        )}
       </div>
 
       <div style={{ fontSize: 13, color: c.muted }}>
         Snapshot of {formatWhen(snapshot.capturedAt)} · {deviceName(snapshot.device)} page
         {props.deviceKey !== "all" ? ` · numbers from ${props.deviceKey} visits` : ""} · {pctOf(matching.matchedClicks, matching.totalClicks)} of this
-        period's clicks are on it · point at anything on the page, click to select it
+        period's clicks are on it
+        {mode === "areas" ? " · click a zone to select it, click again to deselect" : mode === "elements" ? " · point at any element (a logo, a title, a price); click to select it" : ""}
         {props.saving ? " · saving names…" : ""}
         {goal && (goal.loading ? " · computing conversions…" : goal.page ? ` · goal “${goal.label}”: ${pctOf(goal.page.converted, goal.page.visits)} of visits reach it` : "")}
       </div>
@@ -432,7 +447,7 @@ export function SnapshotView(props: {
             borderRadius: 10,
             overflow: "hidden",
             background: "#FFFFFF",
-            cursor: "crosshair",
+            cursor: mode === "areas" || mode === "elements" ? "pointer" : "default",
           }}
         >
           <img src={snapshot.image.dataUrl} alt={`Snapshot of ${snapshot.title || snapshot.url}`} draggable={false} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} />
@@ -486,7 +501,7 @@ export function SnapshotView(props: {
                 </span>
               </div>
             ))}
-          {showDots && mode === "areas" &&
+          {showDots && mode === "elements" &&
             matched.map((m) => {
               const e = map.elements[m.index];
               const size = 8 + Math.round(14 * Math.sqrt(m.clicks / maxClicks));
@@ -553,9 +568,9 @@ export function SnapshotView(props: {
         </div>
 
         {/* Sidebar: the selection, then the areas ranked by the chosen metric, with renaming */}
-        {sidebar && (
+        {sidebar && mode === "areas" && (
           <aside
-            aria-label="Areas"
+            aria-label="Zones"
             style={{
               flex: "1 1 300px",
               minWidth: 0,
@@ -569,8 +584,8 @@ export function SnapshotView(props: {
             }}
           >
             <div style={{ fontSize: 13, color: c.muted }}>
-              {ranked.length} areas · ranked by {AREA_METRICS.find((m) => m.value === activeMetric)?.label.toLowerCase()}. Tick the areas to
-              show on the picture; click a name to point it out on the picture; rename an area to call it what your team calls it.
+              {ranked.length} zones · ranked by {AREA_METRICS.find((m) => m.value === activeMetric)?.label.toLowerCase()}. Tick the zones to
+              show on the picture; click a name to select it; rename a zone to call it what your team calls it.
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button type="button" onClick={() => setHidden(new Set())} disabled={hidden.size === 0} style={smallButton}>
@@ -598,15 +613,12 @@ export function SnapshotView(props: {
         )}
       </div>
 
-      {hover && !sameTarget(hover, pinned) && (
-        <HoverCard x={hover.x} y={hover.y}>
-          {pointerY && hasScroll && (
-            <div style={{ marginBottom: 8, paddingBottom: 8, borderBottom: `1px solid ${c.line}` }}>
-              <span style={{ fontSize: 20, fontWeight: 800, color: "#B8461A" }}>{formatMetric(reachAt(scroll, pointerY.pageY), "seen")}</span>{" "}
-              <span style={{ color: c.muted }}>of visits scroll down to here</span>
-            </div>
-          )}
-          {cardFor(hover)}
+      {hover && !sameTarget(hover, pinned) && <HoverCard x={hover.x} y={hover.y}>{cardFor(hover)}</HoverCard>}
+      {/* Scroll heatmap: the only reading on pointing is how many visits get this far. */}
+      {pointerY && hasScroll && (
+        <HoverCard x={pointerY.x} y={pointerY.y} width={240}>
+          <span style={{ fontSize: 20, fontWeight: 800, color: "#B8461A" }}>{formatMetric(reachAt(scroll, pointerY.pageY), "seen")}</span>{" "}
+          <span style={{ color: c.muted }}>of visits scroll down to here</span>
         </HoverCard>
       )}
     </div>
@@ -644,8 +656,8 @@ function Toggle(props: { label: string; checked: boolean; onChange: (v: boolean)
   );
 }
 
-function HoverCard(props: { x: number; y: number; children: ReactNode }) {
-  const width = 300;
+function HoverCard(props: { x: number; y: number; children: ReactNode; width?: number }) {
+  const width = props.width ?? 300;
   const left = Math.min(props.x + 16, window.innerWidth - width - 12);
   const top = Math.min(props.y + 16, window.innerHeight - 280);
   return (
@@ -699,7 +711,7 @@ function AreaCard(props: {
     .slice(0, 5);
   return (
     <>
-      <div style={kicker}>Area</div>
+      <div style={kicker}>Zone</div>
       <div style={{ fontWeight: 800, fontSize: 15 }}>{props.name}</div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 6, marginTop: 8 }}>
         <Stat label="Seen by" value={formatMetric(numbers.seen, "seen")} accent />

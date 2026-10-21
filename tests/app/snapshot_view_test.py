@@ -52,7 +52,7 @@ with sync_playwright() as p:
     pg.goto((HERE / "harness.html").as_uri())
     pg.wait_for_selector("[data-area]")
     if pg.locator("aside").count() == 0:
-        pg.click("text=Show areas")
+        pg.click("text=Zone list")
     info = pg.inner_text("main, body").split("\n")
     print("info line:", next(l for l in info if "Snapshot of" in l))
     print("labels on the map (Seen by):", pg.eval_on_selector_all("[data-area] span", "els => els.map(e => e.textContent)"))
@@ -68,7 +68,16 @@ with sync_playwright() as p:
     pg.wait_for_timeout(150)
     print("hover card (area):", pg.inner_text("[role=tooltip]").replace("\n", " · ")[:160])
 
-    # Point at an element that nobody clicked (anything in the map), then select it
+    # Zones: a click on a zone selects it, a second click deselects it
+    zb = pg.eval_on_selector_all("[data-area]", "els => els.map(e => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })")
+    zx, zy, zw, zh = zb[0]
+    pg.mouse.click(zx + zw - 20, zy + zh - 20); pg.wait_for_timeout(100)
+    on = pg.locator("[aria-label=Selected]").inner_text().split("\n")[1:3]
+    pg.mouse.click(zx + zw - 20, zy + zh - 20); pg.wait_for_timeout(100)
+    print("zone selected with a click:", on, "| deselected with a second click:", pg.locator("[aria-label=Selected]").count() == 0)
+
+    # Elements: point at an element that nobody clicked (anything in the map), then select it
+    pg.click("[role=radio]:has-text('Elements')")
     pg.mouse.move(5, 5)
     target = pg.evaluate("""() => {
       const d = window.__data, m = d.snapshot.map;
@@ -92,7 +101,8 @@ with sync_playwright() as p:
     pg.click("[aria-label=Selected] [aria-label=Close]")
     print("selection cleared:", pg.locator("[aria-label=Selected]").count() == 0)
 
-    # Hide an area, show it again; select an area from the sidebar and deselect it
+    # Back to zones. Hide a zone, show it again; select a zone from the sidebar and deselect it
+    pg.click("[role=radio]:has-text('Zones')")
     n = lambda: pg.locator("[data-area]").count()
     before = n()
     pg.click("aside input[type=checkbox] >> nth=0")
@@ -108,17 +118,21 @@ with sync_playwright() as p:
     print("metric options with a goal:", pg.eval_on_selector_all("select option", "els => els.map(e => e.textContent)"))
     pg.select_option("select", "conversion")
     print("labels (conversion):", pg.eval_on_selector_all("[data-area] span", "els => els.map(e => e.textContent)"))
+    pg.click("[role=radio]:has-text('Elements')")
     pg.mouse.move(target["x"], target["y"]); pg.wait_for_timeout(150)
     print("element card with goal:", pg.inner_text("[role=tooltip]").replace("\n", " · ")[-120:])
     pg.click("text=Click heatmap"); pg.wait_for_timeout(300)
+    pg.mouse.move(target["x"], target["y"]); pg.wait_for_timeout(150)
+    pg.mouse.click(target["x"], target["y"]); pg.wait_for_timeout(150)
+    print("click heatmap: nothing to point at or select:", pg.locator("[role=tooltip]").count() == 0, pg.locator("[aria-label=Selected]").count() == 0)
     print("click heatmap: canvas drawn:", pg.evaluate("(() => { const c = document.querySelector('canvas'); if (!c) return false; const d = c.getContext('2d').getImageData(0,0,c.width,c.height).data; let n=0; for (let i=3;i<d.length;i+=4) if (d[i]>0) n++; return n; })()"), "· areas hidden:", pg.locator("[data-area]").count() == 0)
     print("heatmap line:", next(l for l in pg.inner_text("body").split("\n") if "clicks placed" in l))
     pg.screenshot(path=str(HERE / "click-heatmap.png"), full_page=True)
     pg.click("text=Scroll heatmap"); pg.wait_for_timeout(200)
     pg.mouse.move(target["x"], target["y"] + 300); pg.wait_for_timeout(150)
-    print("scroll heatmap hover:", pg.inner_text("[role=tooltip]").replace("\n", " · ")[:80])
+    print("scroll heatmap hover (share only):", pg.inner_text("[role=tooltip]").replace("\n", " · ")[:80], "| tooltips:", pg.locator("[role=tooltip]").count())
     pg.screenshot(path=str(HERE / "scroll-heatmap.png"), full_page=True)
-    pg.click("text=Areas"); pg.wait_for_timeout(100)
+    pg.click("[role=radio]:has-text('Zones')"); pg.wait_for_timeout(100)
 
     # Rename the first area
     pg.click("aside [aria-label^=Rename] >> nth=0")

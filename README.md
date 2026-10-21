@@ -42,7 +42,8 @@ Footprints has two screens:
 While an automatic snapshot is taken (a few seconds), Chrome shows a bar
 saying Footprints is debugging the browser: the extension uses Chrome's
 debugging interface to load the page at a given width without touching your
-window. The background tab closes by itself.
+window. The background tab closes by itself. It is shown at 100% zoom even
+if you zoomed the site in Chrome (your own zoom is left as it is).
 
 1. **In Footprints**, choose an application and a page (or a page group),
    then click **Show on the page**.
@@ -89,9 +90,12 @@ Dynatrace and follow you across browsers.
 
 | View | What it shows |
 |---|---|
-| **Areas** | Areas colored by the metric chosen in **Show**; any element can be pointed at or selected |
+| **Zones** | Zones colored by the metric chosen in **Show**; click a zone to select it and read its numbers, click again to deselect. **Zone list** opens the ranking, where zones can be hidden or renamed |
+| **Elements** | Any element of the page — a logo, a title, a price — clicked or not: point at it for its numbers, click to select it |
 | **Click heatmap** | Where visitors click, from the click positions recorded by Dynatrace. A position belongs to the layout the visitor saw, which depends on the window width; each click is moved onto the same element of the snapshot, at the same spot within it (30% from its left, 60% from its top…) when the page was measured at that width, or estimated from how the element's clicks are spread otherwise. Footprints says how many clicks were placed exactly |
 | **Scroll heatmap** | The page colored by the share of visits that get down to each height (red: everyone, blue: few); point anywhere to read the share |
+
+Heatmaps are read through their colors: zones and elements cannot be selected on them.
 
 ### Conversions
 

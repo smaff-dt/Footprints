@@ -1383,7 +1383,7 @@
     async scrollTo(y) {
       window.scrollTo(0, y);
       await wait(60);
-      return { y: Math.round(window.scrollY), viewH: window.innerHeight };
+      return { y: Math.round(window.scrollY), viewH: window.innerHeight, viewW: window.innerWidth };
     },
     /** After the first picture: headers stuck to the top would repeat on every screen. */
     hideTop() {

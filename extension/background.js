@@ -216,6 +216,14 @@ async function autoSnapshot(payload, sender) {
     await metrics(width, height);
     await send("Page.navigate", { url: payload.url });
     await waitForLoad(tab.id, 45000);
+    // Chrome remembers a zoom level per site (Cmd/Ctrl + / -): show this tab at
+    // 100% without changing the zoom the user chose for the site.
+    try {
+      await chrome.tabs.setZoomSettings(tab.id, { mode: "automatic", scope: "per-tab" });
+      await chrome.tabs.setZoom(tab.id, 1);
+    } catch (err) {
+      console.warn("[Footprints] could not reset the zoom:", err);
+    }
     await sleep(2500); // content often keeps loading after "complete"
 
     progress(opener, "Reading the page…");
@@ -246,7 +254,7 @@ async function autoSnapshot(payload, sender) {
       await sleep(250);
       progress(opener, `Taking the picture… ${Math.min(100, Math.round(((at.y + at.viewH) / size.h) * 100))}%`);
       const shot = await send("Page.captureScreenshot", { format: "jpeg", quality: 85 });
-      shots.push({ y: at.y, data: shot.data });
+      shots.push({ y: at.y, viewW: at.viewW, data: shot.data });
       if (i === 0) await inTab(tab.id, "hideTop");
       if (at.y + at.viewH >= size.h - 1) break;
       y = at.y + at.viewH;
@@ -292,8 +300,13 @@ async function autoSnapshot(payload, sender) {
   }
 }
 
-/** Joins screen pictures (taken at `dpr`) into one page picture at `scale`, as a JPEG data URL. */
-async function stitch(shots, size, dpr, scale) {
+/**
+ * Joins screen pictures into one page picture at `scale` (picture pixels per
+ * page pixel), as a JPEG data URL. How many picture pixels a page pixel takes
+ * in each screen picture is measured, not assumed, so a zoom level or screen
+ * density cannot shift the picture against the map.
+ */
+async function stitch(shots, size, _dpr, scale) {
   const canvas = new OffscreenCanvas(Math.round(size.w * scale), Math.round(size.h * scale));
   const g = canvas.getContext("2d");
   g.fillStyle = "#fff";
@@ -301,9 +314,10 @@ async function stitch(shots, size, dpr, scale) {
   for (const shot of shots) {
     const blob = await (await fetch(`data:image/jpeg;base64,${shot.data}`)).blob();
     const bmp = await createImageBitmap(blob);
+    const px = shot.viewW ? bmp.width / shot.viewW : _dpr; // picture pixels per page pixel in this shot
     // Leave out the scrollbar: the page is size.w wide.
-    const srcW = Math.min(bmp.width, Math.round(size.w * dpr));
-    const k = scale / dpr;
+    const srcW = Math.min(bmp.width, Math.round(size.w * px));
+    const k = scale / px;
     g.drawImage(bmp, 0, 0, srcW, bmp.height, 0, Math.round(shot.y * scale), Math.round(srcW * k), Math.round(bmp.height * k));
     bmp.close();
   }
