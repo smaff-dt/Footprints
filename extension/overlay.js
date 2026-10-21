@@ -1379,6 +1379,21 @@
       }
       return floating.length;
     },
+    /** Scrolls the page; returns where it really is (the last screen stops at the bottom). */
+    async scrollTo(y) {
+      window.scrollTo(0, y);
+      await wait(60);
+      return { y: Math.round(window.scrollY), viewH: window.innerHeight };
+    },
+    /** After the first picture: headers stuck to the top would repeat on every screen. */
+    hideTop() {
+      for (const el of fixedElements()) {
+        if (floating.some(([f]) => f === el)) continue;
+        floating.push([el, el.style.getPropertyValue("visibility"), el.style.getPropertyPriority("visibility")]);
+        el.style.setProperty("visibility", "hidden", "important");
+      }
+      return floating.length;
+    },
     restoreFloating() {
       for (const [el, value, priority] of floating.splice(0)) {
         if (value) el.style.setProperty("visibility", value, priority);

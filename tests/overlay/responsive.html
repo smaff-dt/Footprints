@@ -4,7 +4,8 @@
 body{margin:0;font-family:Arial,sans-serif}
 .top{display:flex;justify-content:space-between;align-items:center;padding:16px 40px;background:#111;color:#fff}
 .top a{color:#fff;margin-left:16px}
-.hero{height:260px;background:#e8e2d6;display:flex;align-items:center;padding:0 40px}
+.top{position:sticky;top:0;z-index:5}
+.hero{height:260px;min-height:45vh;background:#e8e2d6;display:flex;align-items:center;padding:0 40px}
 .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:16px;padding:24px 40px;max-width:1200px;margin:0 auto}
 @media (max-width:1300px){.grid{grid-template-columns:repeat(4,1fr)}}
 @media (max-width:900px){.grid{grid-template-columns:repeat(2,1fr)}}
@@ -17,7 +18,7 @@ body{margin:0;font-family:Arial,sans-serif}
 <div id="__next">
   <div class="top"><span>Astroshop</span><div><a href="#">Cart</a><a href="#">Account</a></div></div>
   <main>
-    <div class="hero"><div><h1>Telescopes for everyone</h1><button type="button">Shop now</button></div></div>
+    <div class="hero"><div><h1>Telescopes for everyone</h1><button type="button">Shop now</button></div><span id="marker" style="display:block;margin-left:40px;width:120px;height:40px;background:#ff0000;color:#ff0000">Marker</span></div>
     <div><h2 style="padding:0 40px">Hot products</h2>
       <div class="grid">
         <div class="prod">Product 1<br><button type="button">Add</button></div>

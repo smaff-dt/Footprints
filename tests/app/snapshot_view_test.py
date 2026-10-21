@@ -51,6 +51,8 @@ with sync_playwright() as p:
     pg.on("console", lambda m: m.type == "error" and errors.append(m.text))
     pg.goto((HERE / "harness.html").as_uri())
     pg.wait_for_selector("[data-area]")
+    if pg.locator("aside").count() == 0:
+        pg.click("text=Show areas")
     info = pg.inner_text("main, body").split("\n")
     print("info line:", next(l for l in info if "Snapshot of" in l))
     print("labels on the map (Seen by):", pg.eval_on_selector_all("[data-area] span", "els => els.map(e => e.textContent)"))
@@ -85,7 +87,9 @@ with sync_playwright() as p:
     pg.mouse.click(target["x"], target["y"])
     pg.wait_for_timeout(150)
     print("selected in sidebar:", pg.inner_text("[aria-label=Selected]").replace("\n", " · ")[:200])
-    pg.click("text=Clear selection")
+    pg.screenshot(path=str(HERE / "selected.png"))
+    print("sidebar still open, card on the picture:", pg.locator("aside").count() == 1, pg.locator("[aria-label=Selected]").evaluate("e => e.parentElement.querySelector('img') !== null"))
+    pg.click("[aria-label=Selected] [aria-label=Close]")
     print("selection cleared:", pg.locator("[aria-label=Selected]").count() == 0)
 
     # Hide an area, show it again; select an area from the sidebar and deselect it

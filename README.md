@@ -35,7 +35,7 @@ Footprints has two screens:
 
 | Option | How |
 |---|---|
-| **Desktop snapshot** | Automatic. The extension loads the page in a background tab at the window width most desktop visitors use, takes a full-page picture (bars stuck to the bottom, such as cookie banners, are hidden), and measures where every clicked element is at the other common widths (up to 5, covering about 90% of clicks). |
+| **Desktop snapshot** | Automatic. The extension loads the page in a background tab at the window width most desktop visitors use, pictures it screen by screen at that window size (so the picture matches the measured map exactly; bars stuck to the bottom, such as cookie banners, are hidden), and measures where every clicked element is at the other common widths (up to 5, covering about 90% of clicks). |
 | **Mobile snapshot** | The same, with the page loaded as a phone shows it (phone width and browser identity), using mobile visits only. |
 | **Open the page** | Manual. The live page opens with the clicks drawn on it; resize the window, accept cookies, open menus, then click **Save snapshot to Footprints**. |
 

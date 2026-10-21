@@ -234,17 +234,27 @@ async function autoSnapshot(payload, sender) {
     await inTab(tab.id, "hideFloating");
     const map = await inTab(tab.id, "map");
     size = await inTab(tab.id, "size");
-    // Mobile pictures at twice the size, as on a phone screen, unless the page is very long.
+    // One picture per screen, scrolling down the page, stitched together. The
+    // window keeps its size, so the page looks exactly as when the map was
+    // measured (a full-page picture would stretch the window, and some pages
+    // change their layout when it does).
     const dpr = mobile ? 2 : 1;
-    const scale = mobile && size.h * 2 <= 16000 ? 2 : 1;
-    const shot = await send("Page.captureScreenshot", {
-      format: "jpeg",
-      quality: 82,
-      captureBeyondViewport: true,
-      clip: { x: 0, y: 0, width: size.w, height: size.h, scale: scale / dpr },
-    });
+    const scale = mobile && size.h * 2 <= 16000 ? 2 : 1; // phone pictures at twice the size, unless very long
+    const shots = [];
+    for (let y = 0, i = 0; i < 60; i++) {
+      const at = await inTab(tab.id, "scrollTo", y);
+      await sleep(250);
+      progress(opener, `Taking the picture… ${Math.min(100, Math.round(((at.y + at.viewH) / size.h) * 100))}%`);
+      const shot = await send("Page.captureScreenshot", { format: "jpeg", quality: 85 });
+      shots.push({ y: at.y, data: shot.data });
+      if (i === 0) await inTab(tab.id, "hideTop");
+      if (at.y + at.viewH >= size.h - 1) break;
+      y = at.y + at.viewH;
+    }
+    await inTab(tab.id, "scrollTo", 0);
     await inTab(tab.id, "restoreFloating");
-
+    progress(opener, "Putting the pictures together…");
+    const imageData = await stitch(shots, size, dpr, scale);
     // Where the clicked elements are at the widths visitors use.
     const layouts = [await inTab(tab.id, "measure")];
     const others = (cap.widths || []).filter((w) => Math.abs(w - width) > Math.max(8, width * 0.01)).slice(0, 6);
@@ -267,7 +277,7 @@ async function autoSnapshot(payload, sender) {
       viewport: { w: width, h: height },
       capturedAt: new Date().toISOString(),
       truncated: size.truncated,
-      image: { dataUrl: `data:image/jpeg;base64,${shot.data}`, width: Math.round(size.w * scale), height: Math.round(size.h * scale), scale },
+      image: { dataUrl: imageData, width: Math.round(size.w * scale), height: Math.round(size.h * scale), scale },
       map,
       layouts,
       capture: "auto",
@@ -280,4 +290,26 @@ async function autoSnapshot(payload, sender) {
     if (attached) await chrome.debugger.detach(target).catch(() => {});
     await chrome.tabs.remove(tab.id).catch(() => {});
   }
+}
+
+/** Joins screen pictures (taken at `dpr`) into one page picture at `scale`, as a JPEG data URL. */
+async function stitch(shots, size, dpr, scale) {
+  const canvas = new OffscreenCanvas(Math.round(size.w * scale), Math.round(size.h * scale));
+  const g = canvas.getContext("2d");
+  g.fillStyle = "#fff";
+  g.fillRect(0, 0, canvas.width, canvas.height);
+  for (const shot of shots) {
+    const blob = await (await fetch(`data:image/jpeg;base64,${shot.data}`)).blob();
+    const bmp = await createImageBitmap(blob);
+    // Leave out the scrollbar: the page is size.w wide.
+    const srcW = Math.min(bmp.width, Math.round(size.w * dpr));
+    const k = scale / dpr;
+    g.drawImage(bmp, 0, 0, srcW, bmp.height, 0, Math.round(shot.y * scale), Math.round(srcW * k), Math.round(bmp.height * k));
+    bmp.close();
+  }
+  const out = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.82 });
+  const bytes = new Uint8Array(await out.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return `data:image/jpeg;base64,${btoa(bin)}`;
 }

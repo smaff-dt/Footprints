@@ -11,6 +11,7 @@ import type { ClickPosition, Conversion, ElementConversion, PageElement, ScrollD
 import { HEAT_CELL } from "../dql/queries";
 import { ClickHeatLayer, HeatLegend, ScrollHeatLayer } from "./Heatmaps";
 import { deviceName, formatInt, formatWhen } from "../lib/format";
+import { usePersistentState } from "../lib/storage";
 import {
   AREA_METRICS,
   AreaMetric,
@@ -100,7 +101,7 @@ export function SnapshotView(props: {
   const [detail, setDetail] = useState<number>(() => startingDetail(map, matching));
   const [showDots, setShowDots] = useState(true);
   const [showLines, setShowLines] = useState(true);
-  const [sidebar, setSidebar] = useState(true);
+  const [sidebar, setSidebar] = usePersistentState("fp.sidebar", false);
   const [hover, setHover] = useState<Hover>(null);
   const [pointerY, setPointerY] = useState<{ pageY: number; x: number; y: number } | null>(null);
   const [pinned, setPinned] = useState<Target | null>(null);
@@ -360,7 +361,7 @@ export function SnapshotView(props: {
         {hasScroll && mode !== "clicks" && <Toggle label="Scroll lines" checked={showLines} onChange={setShowLines} />}
         <button
           type="button"
-          onClick={() => setSidebar((s) => !s)}
+          onClick={() => setSidebar(!sidebar)}
           aria-expanded={sidebar}
           style={{
             marginLeft: "auto",
@@ -422,7 +423,6 @@ export function SnapshotView(props: {
           onClick={(e) => {
             const t = targetAt(e);
             setPinned((p) => (sameTarget(p, t) ? null : t));
-            if (t) setSidebar(true);
           }}
           style={{
             flex: "999 1 560px",
@@ -511,6 +511,45 @@ export function SnapshotView(props: {
             })}
           {hoverBox && <Outline box={hoverBox} at={at} dashed />}
           {pinnedBox && <Outline box={pinnedBox} at={at} />}
+          {pinned && pinnedBox && (
+            <section
+              aria-label="Selected"
+              onClick={(e) => e.stopPropagation()}
+              onMouseMove={(e) => e.stopPropagation()}
+              style={{
+                position: "absolute",
+                zIndex: 5,
+                width: 300,
+                maxWidth: "45%",
+                ...(pinnedBox.y < H - 520 ? { top: `${(100 * pinnedBox.y) / H}%` } : { bottom: 8 }),
+                // Next to the selection, on the side with more room.
+                ...(pinnedBox.x + pinnedBox.w / 2 < W / 2
+                  ? { left: `calc(${(100 * (pinnedBox.x + pinnedBox.w)) / W}% + 12px)` }
+                  : { right: `calc(${100 - (100 * pinnedBox.x) / W}% + 12px)` }),
+                border: `2px solid ${c.accent}`,
+                borderRadius: 12,
+                padding: 12,
+                background: c.surface,
+                color: c.ink,
+                boxShadow: "0 8px 28px rgba(22,25,31,0.25)",
+                fontSize: 13,
+                lineHeight: 1.45,
+                cursor: "default",
+              }}
+            >
+              <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: -6 }}>
+                <button
+                  type="button"
+                  aria-label="Close"
+                  onClick={() => setPinned(null)}
+                  style={{ width: 30, height: 30, borderRadius: 8, border: `1px solid ${c.line}`, background: c.surface, color: c.muted, cursor: "pointer" }}
+                >
+                  ✕
+                </button>
+              </div>
+              {cardFor(pinned)}
+            </section>
+          )}
         </div>
 
         {/* Sidebar: the selection, then the areas ranked by the chosen metric, with renaming */}
@@ -529,19 +568,9 @@ export function SnapshotView(props: {
               gap: 8,
             }}
           >
-            {pinned && (
-              <section aria-label="Selected" style={{ border: `2px solid ${c.accent}`, borderRadius: 12, padding: 12, background: c.surface }}>
-                <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                  <button type="button" onClick={() => setPinned(null)} style={{ minHeight: 30, padding: "0 10px", borderRadius: 8, border: `1px solid ${c.line}`, background: c.surface, color: c.ink, cursor: "pointer", fontSize: 13 }}>
-                    Clear selection
-                  </button>
-                </div>
-                {cardFor(pinned)}
-              </section>
-            )}
             <div style={{ fontSize: 13, color: c.muted }}>
               {ranked.length} areas · ranked by {AREA_METRICS.find((m) => m.value === activeMetric)?.label.toLowerCase()}. Tick the areas to
-              show on the picture; click a name to select it, click again to deselect; rename an area to call it what your team calls it.
+              show on the picture; click a name to point it out on the picture; rename an area to call it what your team calls it.
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button type="button" onClick={() => setHidden(new Set())} disabled={hidden.size === 0} style={smallButton}>

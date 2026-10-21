@@ -56,6 +56,20 @@ with sync_playwright() as p:
         print("  layouts:", [(l["width"], l["page"]["w"], len(l["boxes"])) for l in snap["layouts"]])
         first_add = [i for i, e in enumerate(snap["map"]["elements"]) if e["name"].startswith("Add")][4]
         print("  5th 'Add' button at each width:", [(l["width"], l["boxes"].get(str(first_add))) for l in snap["layouts"]])
+        # The picture and the map agree: the red marker is where the map says.
+        from PIL import Image
+        import io
+        im = Image.open(io.BytesIO(img)).convert("RGB")
+        mk = next(e for e in snap["map"]["elements"] if e["name"].startswith("Marker"))
+        sc = snap["image"]["scale"]
+        b = mk["box"]
+        inside = im.getpixel((int((b["x"] + 5) * sc), int((b["y"] + b["h"] / 2) * sc)))
+        above = im.getpixel((int((b["x"] + 5) * sc), int((b["y"] - 6) * sc)))
+        below = im.getpixel((int((b["x"] + 5) * sc), int((b["y"] + b["h"] + 6) * sc)))
+        red = lambda p: p[0] > 200 and p[1] < 60 and p[2] < 60
+        print("  marker aligned (red inside its box, not just above or below):", red(inside) and not red(above) and not red(below), inside, above, below)
+        top = im.crop((0, int(600 * sc), im.width, im.height)).convert("L")
+        print("  sticky header not repeated further down:", sum(1 for px in top.get_flattened_data() if px < 30) < top.width * 20)
         print("  background tab closed:", len(ctx.pages) == tabs_before, "| progress:", app.evaluate("window.progress.slice(-3)"))
     ctx.close()
 srv.shutdown()
