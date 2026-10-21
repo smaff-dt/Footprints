@@ -28,8 +28,15 @@ data = {
     "pageVisits": 40000, "rows": rows, "conversions": conversions, "pageConversion": {"visits": 40000, "converted": 4000},
 }
 (HERE / "harness.html").write_text(f"""<!doctype html><html><head><meta charset="utf-8"></head><body>
-<div id="root"></div><script>window.__data = {json.dumps(data)};</script>
+<link rel="stylesheet" href="harness.css"><div id="root"></div><script>window.__data = {json.dumps(data)};</script>
 <script src="harness.js"></script></body></html>""")
+
+def pick_metric(pg, label):
+    pg.click("[id^=strato-select-trigger]"); pg.wait_for_timeout(300)
+    pg.click(f"[role=option]:has-text('{label}')"); pg.wait_for_timeout(200)
+
+def view(pg, label):
+    pg.click(f"[role=radiogroup] >> text={label}"); pg.wait_for_timeout(200)
 
 def box_of(pg, name):
     """Screen position of the map element whose name starts with `name`."""
@@ -54,7 +61,7 @@ with sync_playwright() as p:
     pg.mouse.move(t["x"], t["y"]); pg.wait_for_timeout(100)
     print("2. pointing outlines a block:", pg.inner_text("[role=tooltip]").replace("\n", " · "))
     pg.mouse.click(t["x"], t["y"]); pg.wait_for_timeout(200)
-    print("3. click turns it on:", pg.locator("[data-zone]").count(), "zone | label:", pg.locator("[data-zone] button").first.inner_text(), "| metric:", pg.eval_on_selector("select", "s => s.options[s.selectedIndex].text"))
+    print("3. click turns it on:", pg.locator("[data-zone]").count(), "zone | label:", pg.locator("[data-zone] button").first.inner_text(), "| metric:", pg.inner_text("[id^=strato-select-trigger]"))
     card = pg.inner_text("[aria-label='Selected zone']").replace("\n", " · ")
     print("   card:", card[:260])
     print("   exact visits asked for:", window_counted := pg.evaluate("window.counted.length"))
@@ -77,7 +84,7 @@ with sync_playwright() as p:
     # Suggest again: replaces what was on.
     pg.click("text=Suggest zones"); pg.wait_for_timeout(300)
     print("   suggest replaces the zones that were on:", pg.locator("[data-zone]").count(), "zones on")
-    pg.select_option("select", "conversion"); pg.wait_for_timeout(300)
+    pick_metric(pg, "Conversion")
     print("   conversion labels:", pg.locator("[data-zone] button").all_inner_texts())
     pg.click("text=Zone list")
     pg.click("aside [aria-label^=Rename] >> nth=0")
@@ -85,13 +92,13 @@ with sync_playwright() as p:
     print("7. renamed; saved zoning:", pg.evaluate("window.zoning[window.zoning.length - 1]"))
     pg.screenshot(path=str(HERE / "zones.png"), full_page=True)
 
-    pg.click("[role=radio]:has-text('Click heatmap')"); pg.wait_for_timeout(300)
+    view(pg, "Click heatmap")
     pg.mouse.move(t["x"], t["y"]); pg.mouse.click(t["x"], t["y"]); pg.wait_for_timeout(150)
     print("8. click heatmap: no tooltip, no zones:", pg.locator("[role=tooltip]").count() == 0, pg.locator("[data-zone]").count() == 0)
-    pg.click("[role=radio]:has-text('Scroll heatmap')"); pg.wait_for_timeout(200)
+    view(pg, "Scroll heatmap")
     pg.mouse.move(t["x"], t["y"] + 200); pg.wait_for_timeout(150)
     print("   scroll heatmap tooltip:", pg.inner_text("[role=tooltip]").replace("\n", " "))
-    pg.click("[role=radio]:has-text('Table')"); pg.wait_for_timeout(200)
+    view(pg, "Table")
     print("9. table rows:", pg.locator("tbody tr").count(), "| first:", pg.locator("tbody tr").first.inner_text().replace("\t", " | ")[:120])
     pg.locator("tbody tr button:has-text('Show')").first.click(); pg.wait_for_timeout(300)
     print("   Show → zones view with the element selected:", pg.locator("[aria-label='Selected zone']").count() == 1)

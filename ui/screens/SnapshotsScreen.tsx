@@ -4,6 +4,8 @@
  * Pages are loaded only when the page picker is opened.
  */
 import { useEffect, useMemo, useState } from "react";
+import { FormField, Label, SearchInput } from "@dynatrace/strato-components/forms";
+import { Heading } from "@dynatrace/strato-components/typography";
 import { Card, Dropdown } from "../components/Controls";
 import { PagePicker } from "../components/PagePicker";
 import { ShowOnPage } from "../components/ShowOnPage";
@@ -48,7 +50,7 @@ export function SnapshotsScreen(props: {
   return (
     <>
       <Card label="New snapshot" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-        <h2 style={heading}>New snapshot</h2>
+        <Heading level={4}>New snapshot</Heading>
         <p style={{ margin: 0, color: c.muted }}>
           Choose a page, then take a snapshot: <strong style={{ color: c.ink }}>Desktop</strong> and <strong style={{ color: c.ink }}>Mobile</strong> are taken
           automatically in the background; <strong style={{ color: c.ink }}>Open the page</strong> lets you arrange it by hand first (cookies, menus, window size).
@@ -127,7 +129,7 @@ function SnapshotList(props: { apps: Application[]; tick: number; onOpen: (id: s
 
   return (
     <Card label="Your snapshots" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <h2 style={heading}>Your snapshots</h2>
+      <Heading level={4}>Your snapshots</Heading>
       {error && <ErrorNotice title="Could not load your snapshots" detail={error} onRetry={() => setRetry((r) => r + 1)} />}
       {!list && !error && <Loading label="Loading your snapshots…" rows={3} />}
       {list && list.length === 0 && (
@@ -136,16 +138,12 @@ function SnapshotList(props: { apps: Application[]; tick: number; onOpen: (id: s
       {list && list.length > 0 && (
         <>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
-            <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, fontWeight: 600, color: c.muted, flex: "1 1 260px" }}>
-              Search
-              <input
-                type="search"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Page or application"
-                style={{ minHeight: 44, padding: "0 12px", borderRadius: 10, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.ink }}
-              />
-            </label>
+            <div style={{ flex: "1 1 260px" }}>
+              <FormField>
+                <Label>Search</Label>
+                <SearchInput value={query} onChange={(v) => setQuery(v)} placeholder="Page or application" />
+              </FormField>
+            </div>
             {appsInList.length > 1 && (
               <Dropdown
                 label="Application"
@@ -168,7 +166,7 @@ function SnapshotList(props: { apps: Application[]; tick: number; onOpen: (id: s
                   justifyContent: "space-between",
                   gap: 12,
                   padding: "12px 14px",
-                  borderRadius: 12,
+                  borderRadius: 9,
                   border: `1px solid ${c.line}`,
                   background: c.surface,
                   color: c.ink,
@@ -177,7 +175,7 @@ function SnapshotList(props: { apps: Application[]; tick: number; onOpen: (id: s
                 }}
               >
                 <span style={{ minWidth: 0 }}>
-                  <span style={{ display: "block", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.label}</span>
+                  <span style={{ display: "block", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.label}</span>
                   <span style={{ display: "block", fontSize: 13, color: c.muted }}>
                     {appName(s.appId)} · {deviceName(s.device)} · {formatWhen(s.createdTime)} · {s.capture === "auto" ? "automatic" : "by hand"}
                   </span>
@@ -195,4 +193,3 @@ function SnapshotList(props: { apps: Application[]; tick: number; onOpen: (id: s
   );
 }
 
-const heading = { margin: 0, fontSize: 20, fontWeight: 800, letterSpacing: "-0.01em" } as const;

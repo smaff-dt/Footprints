@@ -155,6 +155,14 @@ then reload the Footprints tab.
 | next | Conversion ("of the visits that clicked here, how many booked?"), comparison with a previous period or another segment, automatic insights |
 | later | Mobile snapshots, sharing snapshots with the team, click heatmap, frustration (rage) clicks |
 
+## Look and feel
+
+The app is built with Strato, the Dynatrace design system (components,
+icons, colors and type from `@dynatrace/strato-*`), so it looks like the
+other Dynatrace apps and follows the platform's light or dark theme. Only the
+picture of the page — zones, heatmaps, scroll lines — is drawn by Footprints,
+with its own warm colors for zones and a cold-to-hot scale for heatmaps.
+
 ## Data requirements
 
 - A Dynatrace environment on the latest platform (Grail, AppEngine).
@@ -253,10 +261,10 @@ python3 tests/overlay/auto_test.py       # automatic desktop and mobile snapshot
 # the same in a real browser window with the site zoomed to 90% (picture must still match the map):
 ZOOM=0.9 HEADED=1 xvfb-run -a -s "-screen 0 1400x900x24" python3 tests/overlay/auto_test.py
 # app page map, rendered outside Dynatrace with the snapshot from e2e.py:
-node_modules/.bin/esbuild tests/app/harness.tsx --bundle --outfile=tests/app/harness.js --format=iife --jsx=automatic
+node_modules/.bin/esbuild tests/app/harness.tsx --bundle --outfile=tests/app/harness.js --format=iife --jsx=automatic --loader:.woff2=dataurl --loader:.woff=dataurl --define:process.env.NODE_ENV='"production"'
 python3 tests/app/snapshot_view_test.py
 # the whole app with a simulated Dynatrace (SDKs replaced by tests/app/mock):
-node_modules/.bin/esbuild tests/app/app_harness.tsx --bundle --outfile=tests/app/app_harness.js --format=iife --jsx=automatic \
+node_modules/.bin/esbuild tests/app/app_harness.tsx --bundle --outfile=tests/app/app_harness.js --format=iife --jsx=automatic --loader:.woff2=dataurl --loader:.woff=dataurl --define:process.env.NODE_ENV='"production"' \
   --alias:@dynatrace-sdk/client-query=./tests/app/mock/query.ts --alias:@dynatrace-sdk/client-document=./tests/app/mock/document.ts
 python3 tests/app/app_test.py
 # clicks from other window widths placed on the right element (uses auto_test.py's output):

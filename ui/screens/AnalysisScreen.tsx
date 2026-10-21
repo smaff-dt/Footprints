@@ -5,6 +5,9 @@
  * the snapshot; the snapshot can be deleted.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@dynatrace/strato-components/buttons";
+import { Heading } from "@dynatrace/strato-components/typography";
+import { ChevronLeftIcon, DeleteIcon } from "@dynatrace/strato-icons";
 import { Card, Dropdown, Option } from "../components/Controls";
 import { PagePicker } from "../components/PagePicker";
 import { MapMode, SnapshotView, ZoneCount } from "../components/SnapshotView";
@@ -182,13 +185,14 @@ export function AnalysisScreen(props: {
 
   const appName = snapshot ? props.apps.find((a) => a.id === snapshot.appId)?.name ?? snapshot.appId : "";
   const back = (
-    <button
-      type="button"
-      onClick={() => props.onBack(false)}
-      style={{ alignSelf: "flex-start", minHeight: 36, padding: "0 12px", borderRadius: 10, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.ink, fontWeight: 600, cursor: "pointer" }}
-    >
-      ‹ All snapshots
-    </button>
+    <div>
+      <Button variant="default" onClick={() => props.onBack(false)}>
+        <Button.Prefix>
+          <ChevronLeftIcon />
+        </Button.Prefix>
+        All snapshots
+      </Button>
+    </div>
   );
 
   if (loadError) {
@@ -213,25 +217,28 @@ export function AnalysisScreen(props: {
       {back}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
         <div style={{ minWidth: 0 }}>
-          <h1 style={{ margin: 0, fontSize: 30, fontWeight: 800, letterSpacing: "-0.02em", overflowWrap: "anywhere" }}>{meta.label}</h1>
+          <Heading level={2} style={{ overflowWrap: "anywhere" }}>
+            {meta.label}
+          </Heading>
           <p style={{ margin: "4px 0 0", color: c.muted }}>
             {appName} · {deviceName(snapshot.device)} snapshot · taken {formatWhen(snapshot.capturedAt)} {snapshot.capture === "auto" ? "automatically" : "by hand"}
           </p>
         </div>
         {confirmDelete ? (
-          <span style={{ display: "flex", gap: 8, alignItems: "center", minHeight: 44 }}>
-            <span style={{ fontSize: 14 }}>Delete this snapshot?</span>
-            <button type="button" onClick={remove} style={{ ...plainButton, border: "1px solid #9A3412", color: "#9A3412" }}>
+          <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <span>Delete this snapshot?</span>
+            <Button variant="accent" color="critical" onClick={remove}>
               Delete
-            </button>
-            <button type="button" onClick={() => setConfirmDelete(false)} style={plainButton}>
-              Keep
-            </button>
+            </Button>
+            <Button onClick={() => setConfirmDelete(false)}>Keep</Button>
           </span>
         ) : (
-          <button type="button" onClick={() => setConfirmDelete(true)} style={plainButton}>
+          <Button variant="emphasized" onClick={() => setConfirmDelete(true)}>
+            <Button.Prefix>
+              <DeleteIcon />
+            </Button.Prefix>
             Delete snapshot
-          </button>
+          </Button>
         )}
       </div>
 
@@ -291,13 +298,3 @@ export function AnalysisScreen(props: {
   );
 }
 
-const plainButton = {
-  minHeight: 44,
-  padding: "0 14px",
-  borderRadius: 10,
-  border: `1px solid ${c.lineStrong}`,
-  background: c.surface,
-  color: c.ink,
-  fontWeight: 600,
-  cursor: "pointer",
-} as const;

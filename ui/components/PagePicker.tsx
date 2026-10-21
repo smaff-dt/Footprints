@@ -4,6 +4,10 @@
  * ("Path is exactly /", "Query parameters contain utm_").
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@dynatrace/strato-components/buttons";
+import { FormField, Label, Select, TextInput } from "@dynatrace/strato-components/forms";
+import { Heading as StratoHeading } from "@dynatrace/strato-components/typography";
+import { PlusIcon, XmarkIcon } from "@dynatrace/strato-icons";
 import { Filters, PAGE_LIMIT, PageRule, validRules } from "../dql/queries";
 import { PageSummary, searchPages, useScopePages } from "../hooks/data";
 import { formatInt } from "../lib/format";
@@ -88,7 +92,7 @@ export function PagePicker(props: {
 
   return (
     <div ref={boxRef} style={{ position: "relative", display: "flex", flexDirection: "column", gap: 6, flex: "1 1 340px", minWidth: 0 }}>
-      <span style={{ fontSize: 13, fontWeight: 600, color: c.muted }}>{props.label ?? "Page"}</span>
+      <Label>{props.label ?? "Page"}</Label>
       <button
         type="button"
         aria-haspopup="listbox"
@@ -98,10 +102,10 @@ export function PagePicker(props: {
           setOpen((o) => !o);
         }}
         style={{
-          minHeight: 44,
-          padding: "0 12px",
-          borderRadius: 10,
-          border: `1px solid ${c.lineStrong}`,
+          minHeight: 32,
+          padding: "0 10px",
+          borderRadius: 6,
+          border: `1px solid ${c.line}`,
           background: c.surface,
           color: c.ink,
           textAlign: "left",
@@ -151,18 +155,21 @@ export function PagePicker(props: {
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Type to filter, e.g. product or checkout"
               aria-label="Search pages and groups"
-              style={{ flex: 1, minWidth: 0, minHeight: 40, padding: "0 10px", borderRadius: 8, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.ink }}
+              style={{ flex: 1, minWidth: 0, minHeight: 32, padding: "0 10px", borderRadius: 6, border: `1px solid ${c.line}`, background: c.surface, color: c.ink }}
             />
-            <button
-              type="button"
+            <Button
+              variant="emphasized"
+              color="primary"
               onClick={() => {
                 setOpen(false);
                 props.onNewGroup();
               }}
-              style={{ minHeight: 40, padding: "0 12px", borderRadius: 8, border: `1px solid ${c.ink}`, background: c.ink, color: c.surface, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}
             >
-              + New group
-            </button>
+              <Button.Prefix>
+                <PlusIcon />
+              </Button.Prefix>
+              New group
+            </Button>
           </div>
           <div style={{ fontSize: 12, color: c.muted, padding: "0 2px" }}>
             {props.loading
@@ -214,7 +221,7 @@ function describe(ch: PageChoice): string {
 
 function Heading(props: { children: string }) {
   return (
-    <div style={{ position: "sticky", top: 0, zIndex: 1, background: c.surface, padding: "6px 10px 2px", fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: c.muted }}>
+    <div style={{ position: "sticky", top: 0, zIndex: 1, background: c.surface, padding: "6px 10px 2px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: c.muted }}>
       {props.children}
     </div>
   );
@@ -279,19 +286,20 @@ export function GroupEditor(props: {
   const previewCurrent = JSON.stringify(previewRules) === usableKey;
 
   const valid = name.trim().length > 0 && usable.length > 0;
-  const field = { minHeight: 44, padding: "0 12px", borderRadius: 10, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.ink } as const;
 
   function update(i: number, patch: Partial<PageRule>) {
     setRules((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   }
 
   return (
-    <section aria-label="Page group" style={{ background: c.surface, border: `2px solid ${c.accent}`, borderRadius: 14, padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
-      <h2 style={{ margin: 0, fontSize: 18 }}>{props.group ? "Edit page group" : "New page group"}</h2>
-      <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13, fontWeight: 600, color: c.muted, maxWidth: 420 }}>
-        Name
-        <input value={name} onChange={(e) => setName(e.target.value)} maxLength={60} placeholder="e.g. Product pages, Home page, Newsletter visits" style={field} />
-      </label>
+    <section aria-label="Page group" style={{ background: c.surface, border: `1px solid ${c.line}`, borderRadius: 12, padding: 16, display: "flex", flexDirection: "column", gap: 14, boxShadow: "0 2px 8px rgba(0,0,0,0.06)" }}>
+      <StratoHeading level={4}>{props.group ? "Edit page group" : "New page group"}</StratoHeading>
+      <div style={{ maxWidth: 420 }}>
+        <FormField>
+          <Label>Name</Label>
+          <TextInput value={name} onChange={(v) => setName(v)} maxLength={60} placeholder="e.g. Product pages, Home page, Newsletter visits" />
+        </FormField>
+      </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: c.muted }}>Pages where</span>
@@ -299,34 +307,45 @@ export function GroupEditor(props: {
           const part = URL_PARTS.find((p) => p.value === r.part);
           return (
             <div key={i} style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-              {i > 0 && <span style={{ fontSize: 13, fontWeight: 700, color: c.muted, minWidth: 30 }}>and</span>}
-              <select aria-label="Part of the address" value={r.part} onChange={(e) => update(i, { part: e.target.value as PageRule["part"] })} style={field}>
-                {URL_PARTS.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-              <select aria-label="Rule" value={r.op} onChange={(e) => update(i, { op: e.target.value as PageRule["op"] })} style={field}>
-                {RULE_OPS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-              <input aria-label="Text" value={r.value} onChange={(e) => update(i, { value: e.target.value })} placeholder={part?.example} style={{ ...field, flex: "1 1 200px", minWidth: 160 }} />
+              {i > 0 && <span style={{ fontSize: 13, fontWeight: 600, color: c.muted, minWidth: 30 }}>and</span>}
+              <Select<PageRule["part"]> aria-label="Part of the address" value={r.part} onChange={(v) => v && update(i, { part: v })}>
+                <Select.Content>
+                  {URL_PARTS.map((p) => (
+                    <Select.Option key={p.value} value={p.value}>
+                      {p.label}
+                    </Select.Option>
+                  ))}
+                </Select.Content>
+              </Select>
+              <Select<PageRule["op"]> aria-label="Rule" value={r.op} onChange={(v) => v && update(i, { op: v })}>
+                <Select.Content>
+                  {RULE_OPS.map((o) => (
+                    <Select.Option key={o.value} value={o.value}>
+                      {o.label}
+                    </Select.Option>
+                  ))}
+                </Select.Content>
+              </Select>
+              <div style={{ flex: "1 1 200px", minWidth: 160 }}>
+                <TextInput aria-label="Text" value={r.value} onChange={(v) => update(i, { value: v })} placeholder={part?.example} />
+              </div>
               {rules.length > 1 && (
-                <button type="button" aria-label="Remove this rule" onClick={() => setRules((rs) => rs.filter((_, j) => j !== i))} style={{ ...field, width: 44, padding: 0, cursor: "pointer", color: c.muted }}>
-                  ✕
-                </button>
+                <Button aria-label="Remove this rule" onClick={() => setRules((rs) => rs.filter((_, j) => j !== i))}>
+                  <Button.Prefix>
+                    <XmarkIcon />
+                  </Button.Prefix>
+                </Button>
               )}
             </div>
           );
         })}
         <div>
-          <button type="button" onClick={() => setRules((rs) => [...rs, { part: "query", op: "contains", value: "" }])} style={{ ...field, minHeight: 36, fontWeight: 600, cursor: "pointer" }}>
-            + Add a rule
-          </button>
+          <Button onClick={() => setRules((rs) => [...rs, { part: "query", op: "contains", value: "" }])}>
+            <Button.Prefix>
+              <PlusIcon />
+            </Button.Prefix>
+            Add a rule
+          </Button>
         </div>
         <div style={{ fontSize: 13, color: c.muted }}>
           Examples: <em>Path is exactly “/”</em> for the home page · <em>Path contains “/product/”</em> for every product page ·{" "}
@@ -362,21 +381,22 @@ export function GroupEditor(props: {
 
       {props.error && <div role="alert" style={{ padding: "10px 12px", borderRadius: 10, background: c.warnSoft, color: c.warnInk }}>{props.error}</div>}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <button
-          type="button"
-          disabled={!valid || props.saving}
+        <Button
+          variant="accent"
+          color="primary"
+          disabled={!valid}
+          loading={props.saving}
           onClick={() => props.onSave({ id: props.group?.id, appId: props.filters.appId, name: name.trim(), rules: usable.map((r) => ({ ...r, value: r.value.trim() })) })}
-          style={{ ...field, border: `1px solid ${c.ink}`, background: c.ink, color: c.surface, fontWeight: 700, cursor: valid ? "pointer" : "not-allowed", opacity: valid ? 1 : 0.5 }}
         >
-          {props.saving ? "Saving…" : "Save group"}
-        </button>
-        <button type="button" onClick={props.onCancel} style={{ ...field, fontWeight: 600, cursor: "pointer" }}>
-          Cancel
-        </button>
+          Save group
+        </Button>
+        <Button onClick={props.onCancel}>Cancel</Button>
         {props.group && (
-          <button type="button" onClick={() => props.group && props.onDelete(props.group)} style={{ ...field, border: "1px solid #9A3412", color: "#9A3412", fontWeight: 600, cursor: "pointer", marginLeft: "auto" }}>
-            Delete group
-          </button>
+          <div style={{ marginLeft: "auto" }}>
+            <Button color="critical" onClick={() => props.group && props.onDelete(props.group)}>
+              Delete group
+            </Button>
+          </div>
         )}
       </div>
     </section>

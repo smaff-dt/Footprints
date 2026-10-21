@@ -4,3 +4,5 @@ harness.html
 __pycache__/
 app_harness.js
 app_harness.html
+harness.css
+app_harness.css

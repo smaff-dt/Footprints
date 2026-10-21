@@ -4,6 +4,7 @@
  */
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
+import { AppRoot } from "@dynatrace/strato-components/core";
 import { MapMode, SnapshotView } from "../../ui/components/SnapshotView";
 import type { Snapshot } from "../../ui/lib/snapshots";
 import { GLOBAL_CSS } from "../../ui/theme";
@@ -54,4 +55,8 @@ function App() {
     </div>
   );
 }
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(
+  <AppRoot>
+    <App />
+  </AppRoot>,
+);

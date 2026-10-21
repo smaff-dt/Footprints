@@ -1,57 +1,47 @@
+/**
+ * Loading, error and empty states, in Strato's look.
+ */
+import { Button } from "@dynatrace/strato-components/buttons";
+import { Skeleton } from "@dynatrace/strato-components/content";
+import { Heading, Text } from "@dynatrace/strato-components/typography";
+import { Borders, Colors } from "@dynatrace/strato-design-tokens";
 import { c } from "../theme";
 
 export function Loading(props: { label: string; rows?: number }) {
   return (
     <div role="status" aria-label={props.label} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {Array.from({ length: props.rows ?? 4 }).map((_, i) => (
-        <div
-          key={i}
-          style={{
-            height: 54,
-            borderRadius: 10,
-            background: c.surfaceAlt,
-            animation: "fp-pulse 1.4s ease-in-out infinite",
-            animationDelay: `${i * 0.12}s`,
-          }}
-        />
+        <Skeleton key={i} height={48} width="100%" />
       ))}
-      <span style={{ fontSize: 13, color: c.muted }}>{props.label}</span>
+      <Text style={{ color: c.muted }}>{props.label}</Text>
     </div>
   );
 }
 
 export function ErrorNotice(props: { title: string; detail: string; onRetry?: () => void }) {
   return (
-    <div role="alert" style={{ padding: "14px 16px", borderRadius: 12, background: c.warnSoft, color: c.warnInk }}>
-      <div style={{ fontWeight: 700 }}>{props.title}</div>
-      <div style={{ fontSize: 14, marginTop: 4 }}>
-        Please try again in a moment. If it keeps happening, share the technical details below with your Dynatrace
-        administrator.
-      </div>
+    <div
+      role="alert"
+      style={{
+        padding: "12px 16px",
+        borderRadius: Borders.Radius.Container.Default,
+        background: Colors.Background.Container.Critical.Default,
+        border: `1px solid ${Colors.Border.Critical.Default}`,
+        color: c.ink,
+      }}
+    >
+      <Text style={{ fontWeight: 600, color: Colors.Text.Critical.Default, display: "block" }}>{props.title}</Text>
+      <Text style={{ display: "block", marginTop: 4 }}>
+        Please try again in a moment. If it keeps happening, share the technical details below with your Dynatrace administrator.
+      </Text>
       <details style={{ marginTop: 8, fontSize: 13 }}>
         <summary style={{ cursor: "pointer", fontWeight: 600 }}>Technical details</summary>
-        <div style={{ marginTop: 6, wordBreak: "break-word", fontFamily: "ui-monospace, Menlo, monospace" }}>
-          {props.detail}
-        </div>
+        <div style={{ marginTop: 6, wordBreak: "break-word", fontFamily: "ui-monospace, Menlo, monospace" }}>{props.detail}</div>
       </details>
       {props.onRetry && (
-        <button
-          type="button"
-          onClick={props.onRetry}
-          style={{
-            marginTop: 10,
-            minHeight: 40,
-            padding: "0 14px",
-            borderRadius: 10,
-            border: `1px solid ${c.lineStrong}`,
-            background: c.surface,
-            color: c.ink,
-            fontWeight: 600,
-            cursor: "pointer",
-          }}
-        >
-          Try again
-        </button>
+        <div style={{ marginTop: 10 }}>
+          <Button onClick={props.onRetry}>Try again</Button>
+        </div>
       )}
     </div>
   );
@@ -59,9 +49,9 @@ export function ErrorNotice(props: { title: string; detail: string; onRetry?: ()
 
 export function Empty(props: { title: string; detail: string }) {
   return (
-    <div style={{ padding: "28px 16px", textAlign: "center", color: c.muted }}>
-      <div style={{ fontWeight: 700, color: c.ink, fontSize: 16 }}>{props.title}</div>
-      <div style={{ fontSize: 14, marginTop: 6, maxWidth: 460, marginInline: "auto" }}>{props.detail}</div>
+    <div style={{ padding: "28px 16px", textAlign: "center" }}>
+      <Heading level={5}>{props.title}</Heading>
+      <Text style={{ display: "block", color: c.muted, marginTop: 6, maxWidth: 460, marginInline: "auto" }}>{props.detail}</Text>
     </div>
   );
 }

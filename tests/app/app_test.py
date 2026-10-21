@@ -39,7 +39,7 @@ window.__dt = { queries: [], rows: (q) => {
 """ % (json.dumps(docs), json.dumps({"pages": pages, "elements": elements}))
 
 (HERE / "app_harness.html").write_text(f"""<!doctype html><html><head><meta charset="utf-8"></head><body>
-<div id="root"></div><script>{script}</script><script src="app_harness.js"></script></body></html>""")
+<link rel="stylesheet" href="app_harness.css"><div id="root"></div><script>{script}</script><script src="app_harness.js"></script></body></html>""")
 
 with sync_playwright() as p:
     b = p.chromium.launch()
@@ -60,9 +60,10 @@ with sync_playwright() as p:
     print("   capture buttons:", pg.locator("button:has-text('snapshot'), button:has-text('Open the page')").all_inner_texts())
     pg.click("[role=listitem] >> nth=0")
     pg.wait_for_selector("text=Suggest zones", timeout=10000)
-    print("3. analysis screen:", pg.inner_text("h1"), "|", pg.locator("h1 + p").inner_text())
+    print("3. analysis screen:", pg.inner_text("h2"), "|", pg.locator("h2 + p").inner_text())
     print("   filters:", [t.split("\n")[0] for t in pg.locator("section[aria-label=Filters] label, section[aria-label=Filters] span").all_inner_texts()][:4])
     print("   device filter gone:", pg.locator("text=Tablet").count() == 0)
+    pg.screenshot(path=str(HERE / "app-analysis.png"))
     # Turn zones on and off quickly, several times: every change is saved, none is refused.
     img = pg.locator("img").first.bounding_box()
     for k in range(6):
@@ -73,16 +74,16 @@ with sync_playwright() as p:
     shown = pg.locator("[data-zone]").count()
     print("   quick clicks: error shown:", pg.locator("text=Could not save").count() > 0, "| zones on:", shown, "| saved:", len(saved["zones"]) if saved else None,
           "| version:", pg.evaluate("window.__docs.find(d => d.id === 'doc-0').version"))
-    pg.click("text=‹ All snapshots")
+    pg.click("button:has-text('All snapshots')")
     pg.wait_for_selector("text=Your snapshots")
     print("4. back to the list: OK")
     # A snapshot arriving from the extension is saved and opened.
     s2 = dict(snapshot, capturedAt="2026-10-21T12:00:00Z", capture="auto")
     pg.evaluate("s => window.postMessage({ source: 'footprints-extension', type: 'snapshot', deliveryId: 'd1', snapshot: s }, '*')", s2)
-    pg.wait_for_selector("text=‹ All snapshots", timeout=10000)
+    pg.wait_for_selector("button:has-text('All snapshots')", timeout=10000)
     pg.wait_for_selector("text=Suggest zones", timeout=10000)
-    print("5. new snapshot opened automatically:", pg.locator("h1 + p").inner_text())
-    pg.click("text=‹ All snapshots")
+    print("5. new snapshot opened automatically:", pg.locator("h2 + p").inner_text())
+    pg.click("button:has-text('All snapshots')")
     pg.wait_for_selector("text=Your snapshots")
     pg.wait_for_timeout(300)
     print("   list now:", pg.locator("[role=listitem]").all_inner_texts())

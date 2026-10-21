@@ -39,6 +39,12 @@ import {
 import type { Box, Snapshot } from "../lib/snapshots";
 import { usePersistentState } from "../lib/storage";
 import { c } from "../theme";
+import { Button } from "@dynatrace/strato-components/buttons";
+import { Chip as StratoChip } from "@dynatrace/strato-components/content";
+import { Select } from "@dynatrace/strato-components/forms";
+import { Colors } from "@dynatrace/strato-design-tokens";
+import { AiIcon, ListIcon } from "@dynatrace/strato-icons";
+import { Checkbox, Segmented } from "./Controls";
 import { ClickHeatLayer, HeatLegend, ScrollHeatLayer } from "./Heatmaps";
 
 export type MapMode = "zones" | "clicks" | "scroll" | "table";
@@ -66,7 +72,7 @@ export interface ZoneCount {
 type Count = ZoneCount | "loading" | "error";
 
 const HEAT = ["#F6D9A8", "#EE9B4D", "#B8461A"];
-const BLUE = "#2F4BD8";
+const BLUE = Colors.Border.Primary.Accent;
 
 function chipColors(ratio: number): { bg: string; fg: string } {
   if (ratio >= 0.66) return { bg: HEAT[2], fg: "#FFFFFF" };
@@ -307,58 +313,31 @@ export function SnapshotView(props: {
       {/* What to show */}
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px 18px" }}>
         {props.onMode && (
-          <div role="radiogroup" aria-label="View" style={{ display: "flex", padding: 3, borderRadius: 12, background: c.surfaceAlt, border: `1px solid ${c.line}` }}>
-            {(
-              [
-                ["zones", "Zones"],
-                ["clicks", "Click heatmap"],
-                ["scroll", "Scroll heatmap"],
-                ["table", "Table"],
-              ] as [MapMode, string][]
-            ).map(([value, label]) => {
-              const off = value === "scroll" && !hasScroll;
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  role="radio"
-                  aria-checked={mode === value}
-                  disabled={off}
-                  onClick={() => props.onMode!(value)}
-                  style={{
-                    minHeight: 36,
-                    padding: "0 14px",
-                    borderRadius: 9,
-                    border: 0,
-                    background: mode === value ? c.surface : "transparent",
-                    boxShadow: mode === value ? "0 1px 3px rgba(22,25,31,0.18)" : "none",
-                    color: c.ink,
-                    fontWeight: mode === value ? 700 : 500,
-                    cursor: off ? "not-allowed" : "pointer",
-                    opacity: off ? 0.5 : 1,
-                  }}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
+          <Segmented<MapMode>
+            label="View"
+            value={mode}
+            onChange={(m) => props.onMode!(m)}
+            options={[
+              { value: "zones", label: "Zones" },
+              { value: "clicks", label: "Click heatmap" },
+              { value: "scroll", label: "Scroll heatmap", disabled: !hasScroll },
+              { value: "table", label: "Table" },
+            ]}
+          />
         )}
         {mode === "zones" && (
           <>
-            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: c.muted, position: "relative" }}>
-              Show
-              <select
-                value={activeMetric}
-                onChange={(e) => setMetric(e.target.value as ZoneMetric)}
-                style={{ minHeight: 40, padding: "0 10px", borderRadius: 10, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.ink, fontWeight: 700 }}
-              >
-                {metricOptions.map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: c.muted, position: "relative" }}>
+              <span>Show</span>
+              <Select<ZoneMetric> value={activeMetric} onChange={(v) => v && setMetric(v)} aria-label="Metric">
+                <Select.Content>
+                  {metricOptions.map((m) => (
+                    <Select.Option key={m.value} value={m.value}>
+                      {m.label}
+                    </Select.Option>
+                  ))}
+                </Select.Content>
+              </Select>
               <button
                 type="button"
                 aria-label={`What is ${metricInfo.label}?`}
@@ -367,7 +346,7 @@ export function SnapshotView(props: {
                   e.preventDefault();
                   setShowHelp((v) => !v);
                 }}
-                style={{ width: 28, height: 28, borderRadius: 999, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.muted, cursor: "pointer", fontWeight: 700 }}
+                style={{ width: 28, height: 28, borderRadius: 999, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.muted, cursor: "pointer", fontWeight: 600 }}
               >
                 i
               </button>
@@ -379,14 +358,22 @@ export function SnapshotView(props: {
                   <strong>{metricInfo.label}:</strong> {metricInfo.help}
                 </span>
               )}
-            </label>
-            <button type="button" onClick={suggest} style={pillButton}>
-              ✦ Suggest zones
-            </button>
+            </div>
+            <Button variant="emphasized" onClick={suggest}>
+              <Button.Prefix>
+                <AiIcon />
+              </Button.Prefix>
+              Suggest zones
+            </Button>
             {hasScroll && <Toggle label="Scroll lines" checked={showLines} onChange={setShowLines} />}
-            <button type="button" onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen} style={{ ...pillButton, marginLeft: "auto", background: listOpen ? c.accentSoft : c.surface }}>
-              Zone list ({zoneIdx.length})
-            </button>
+            <div style={{ marginLeft: "auto" }}>
+              <Button variant={listOpen ? "emphasized" : "default"} color={listOpen ? "primary" : "neutral"} onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen}>
+                <Button.Prefix>
+                  <ListIcon />
+                </Button.Prefix>
+                Zone list ({zoneIdx.length})
+              </Button>
+            </div>
           </>
         )}
         {mode === "clicks" && <HeatLegend low="Fewer clicks" high="More clicks" />}
@@ -415,17 +402,17 @@ export function SnapshotView(props: {
       {mode === "zones" && suggestNote && (
         <div role="status" style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", padding: "10px 12px", borderRadius: 10, background: c.accentSoft, fontSize: 14 }}>
           <span>✦ {suggestNote}</span>
-          <button type="button" onClick={() => setSuggestNote(null)} aria-label="Dismiss" style={pillButton}>
+          <Button onClick={() => setSuggestNote(null)} aria-label="Dismiss">
             OK
-          </button>
+          </Button>
         </div>
       )}
       {mode === "zones" && overlapNote && (
         <div role="status" style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", padding: "8px 12px", borderRadius: 10, background: c.surfaceAlt, fontSize: 14 }}>
           <span>{overlapNote}</span>
-          <button type="button" onClick={() => setOverlapNote(null)} aria-label="Dismiss" style={{ ...pillButton, minHeight: 30 }}>
+          <Button size="condensed" onClick={() => setOverlapNote(null)} aria-label="Dismiss">
             OK
-          </button>
+          </Button>
         </div>
       )}
       {mode === "clicks" && heat && (
@@ -539,7 +526,7 @@ export function SnapshotView(props: {
                           borderRadius: 999,
                           border: 0,
                           fontSize: 12,
-                          fontWeight: 800,
+                          fontWeight: 600,
                           background: isSel ? BLUE : h.bg,
                           color: isSel ? "#FFFFFF" : h.fg,
                           boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
@@ -556,8 +543,8 @@ export function SnapshotView(props: {
             {showLines &&
               mode !== "clicks" &&
               lineGroups.map((g) => (
-                <div key={g.d} style={{ position: "absolute", left: 0, right: 0, top: `${(100 * g.d) / H}%`, borderTop: `2px dashed rgba(47,75,216,0.85)`, pointerEvents: "none" }}>
-                  <span style={{ position: "absolute", right: 8, top: -20, padding: "1px 8px", borderRadius: "6px 6px 0 0", background: BLUE, color: "#FFFFFF", fontSize: 11, fontWeight: 700 }}>
+                <div key={g.d} style={{ position: "absolute", left: 0, right: 0, top: `${(100 * g.d) / H}%`, borderTop: `2px dashed rgba(11,86,229,0.85)`, pointerEvents: "none" }}>
+                  <span style={{ position: "absolute", right: 8, top: -20, padding: "1px 8px", borderRadius: "6px 6px 0 0", background: BLUE, color: "#FFFFFF", fontSize: 11, fontWeight: 600 }}>
                     {joinShares(g.shares)} of visits see down to here
                   </span>
                 </div>
@@ -596,16 +583,15 @@ export function SnapshotView(props: {
                     <span style={{ fontSize: 13, color: c.muted }}>
                       {zoneIdx.length} zones · by {metricInfo.label.toLowerCase()}
                     </span>
-                    <button
-                      type="button"
+                    <Button
+                      size="condensed"
                       onClick={() => {
                         setZones([]);
                         setSelected(null);
                       }}
-                      style={pillButton}
                     >
                       Turn all off
-                    </button>
+                    </Button>
                   </div>
                   {zoneIdx
                     .slice()
@@ -635,7 +621,7 @@ export function SnapshotView(props: {
 
       {hoverI !== null && hover && (
         <HoverCard x={hover.x} y={hover.y} width={240}>
-          <div style={{ fontWeight: 700 }}>{nameOf(hoverI)}</div>
+          <div style={{ fontWeight: 600 }}>{nameOf(hoverI)}</div>
           <div style={{ color: c.muted }}>
             {metricInfo.label}: <strong style={{ color: c.ink }}>{formatShare(valueOf(hoverI))}</strong>
             {zoneSet.has(hoverI) ? " · click to turn off" : " · click to turn into a zone"}
@@ -644,7 +630,7 @@ export function SnapshotView(props: {
       )}
       {pointerY && hasScroll && (
         <HoverCard x={pointerY.x} y={pointerY.y} width={240}>
-          <span style={{ fontSize: 20, fontWeight: 800, color: "#B8461A" }}>{formatShare(reachAt(scroll, pointerY.pageY))}</span>{" "}
+          <span style={{ fontSize: 20, fontWeight: 600, color: "#B8461A" }}>{formatShare(reachAt(scroll, pointerY.pageY))}</span>{" "}
           <span style={{ color: c.muted }}>of visits scroll down to here</span>
         </HoverCard>
       )}
@@ -657,25 +643,11 @@ function joinShares(shares: number[]): string {
   return p.length === 1 ? p[0] : `${p.slice(0, -1).join(", ")} and ${p[p.length - 1]}`;
 }
 
-const pillButton: CSSProperties = {
-  minHeight: 36,
-  padding: "0 12px",
-  borderRadius: 10,
-  border: `1px solid ${c.lineStrong}`,
-  background: c.surface,
-  color: c.ink,
-  fontWeight: 600,
-  cursor: "pointer",
-  fontSize: 14,
-};
 
 function Chip(props: { children: ReactNode; muted?: boolean; title?: string }) {
   return (
-    <span
-      title={props.title}
-      style={{ padding: "4px 10px", borderRadius: 999, background: props.muted ? "transparent" : c.surfaceAlt, border: `1px solid ${c.line}`, fontSize: 12, fontWeight: 600, color: props.muted ? c.muted : c.ink }}
-    >
-      {props.children}
+    <span title={props.title} style={{ opacity: props.muted ? 0.75 : 1 }}>
+      <StratoChip>{props.children}</StratoChip>
     </span>
   );
 }
@@ -690,7 +662,7 @@ function Outline(props: { box: Box; at: (b: Box) => CSSProperties; dashed?: bool
         boxSizing: "border-box",
         borderRadius: 4,
         border: `3px ${props.dashed ? "dashed" : "solid"} ${BLUE}`,
-        boxShadow: "0 0 0 3px rgba(47,75,216,0.2)",
+        boxShadow: "0 0 0 3px rgba(11,86,229,0.2)",
         pointerEvents: "none",
       }}
     />
@@ -698,12 +670,7 @@ function Outline(props: { box: Box; at: (b: Box) => CSSProperties; dashed?: bool
 }
 
 function Toggle(props: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
-  return (
-    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 14, cursor: "pointer" }}>
-      <input type="checkbox" checked={props.checked} onChange={(e) => props.onChange(e.target.checked)} style={{ width: 18, height: 18, margin: 0, accentColor: BLUE }} />
-      {props.label}
-    </label>
-  );
+  return <Checkbox label={props.label} checked={props.checked} onChange={props.onChange} />;
 }
 
 function HoverCard(props: { x: number; y: number; children: ReactNode; width?: number }) {
@@ -739,12 +706,12 @@ function Stat(props: { label: string; value: string; accent?: boolean; title?: s
   return (
     <div title={props.title} style={{ background: props.accent ? c.accentSoft : c.surfaceAlt, borderRadius: 8, padding: "6px 8px" }}>
       <div style={{ fontSize: 11, color: c.muted }}>{props.label}</div>
-      <div style={{ fontSize: 16, fontWeight: 800, color: props.accent ? c.accent : c.ink }}>{props.value}</div>
+      <div style={{ fontSize: 16, fontWeight: 600, color: props.accent ? c.accent : c.ink }}>{props.value}</div>
     </div>
   );
 }
 
-const kicker: CSSProperties = { fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: c.muted };
+const kicker: CSSProperties = { fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: c.muted };
 
 /** The card of a zone: its numbers, and the blocks around it to pick a larger or smaller one. */
 function ZoneCard(props: {
@@ -790,7 +757,7 @@ function ZoneCard(props: {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
         <div style={{ minWidth: 0 }}>
           <div style={kicker}>Zone</div>
-          <div style={{ fontWeight: 800, fontSize: 15, overflowWrap: "anywhere" }}>{props.name}</div>
+          <div style={{ fontWeight: 600, fontSize: 15, overflowWrap: "anywhere" }}>{props.name}</div>
         </div>
         <button type="button" aria-label="Close" onClick={props.onClose} style={{ width: 30, height: 30, flex: "none", borderRadius: 8, border: `1px solid ${c.line}`, background: c.surface, color: c.muted, cursor: "pointer" }}>
           ✕
@@ -808,7 +775,7 @@ function ZoneCard(props: {
       {props.goal && (
         <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 8, background: c.surfaceAlt }}>
           <div style={{ fontSize: 11, color: c.muted }}>Reached “{props.goal.label}” after a click here</div>
-          <div style={{ fontSize: 16, fontWeight: 800 }}>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>
             {n.conversion === null ? "–" : `${approx}${formatShare(n.conversion)}`}
             {props.goal.page && props.goal.page.visits > 0 && (
               <span style={{ fontSize: 12, fontWeight: 500, color: c.muted }}> · page average {formatShare(props.goal.page.converted / props.goal.page.visits)}</span>
@@ -853,9 +820,9 @@ function ZoneCard(props: {
         </div>
       )}
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
-        <button type="button" onClick={props.onOff} style={pillButton}>
+        <Button size="condensed" onClick={props.onOff}>
           Turn this zone off
-        </button>
+        </Button>
       </div>
     </section>
   );
@@ -906,7 +873,7 @@ function ZoneRow(props: {
         background: props.selected ? c.accentSoft : c.surface,
       }}
     >
-      <span style={{ minWidth: 54, textAlign: "center", padding: "3px 8px", borderRadius: 999, fontWeight: 800, fontSize: 13, background: h.bg, color: h.fg }}>{props.value}</span>
+      <span style={{ minWidth: 54, textAlign: "center", padding: "3px 8px", borderRadius: 999, fontWeight: 600, fontSize: 13, background: h.bg, color: h.fg }}>{props.value}</span>
       {editing ? (
         <input
           ref={inputRef}
@@ -920,7 +887,7 @@ function ZoneRow(props: {
         />
       ) : (
         <button type="button" onClick={props.onSelect} style={{ flex: 1, minWidth: 0, textAlign: "left", border: 0, background: "transparent", color: c.ink, cursor: "pointer", padding: 0, minHeight: 34 }}>
-          <span style={{ display: "block", fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.name}</span>
+          <span style={{ display: "block", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.name}</span>
           {props.suggested && <span style={{ display: "block", fontSize: 12, color: c.muted }}>Suggested: {props.suggested}</span>}
         </button>
       )}
@@ -999,7 +966,7 @@ function TopTable(props: {
             <th style={{ ...cell, textAlign: "left" }}>Element</th>
             {shown.map((col) => (
               <th key={col.key} style={cell} aria-sort={sort === col.key ? "descending" : "none"}>
-                <button type="button" onClick={() => setSort(col.key)} style={{ border: 0, background: "transparent", color: sort === col.key ? c.accent : c.ink, fontWeight: 700, cursor: "pointer", padding: 0 }}>
+                <button type="button" onClick={() => setSort(col.key)} style={{ border: 0, background: "transparent", color: sort === col.key ? c.accent : c.ink, fontWeight: 600, cursor: "pointer", padding: 0 }}>
                   {col.label}
                   {sort === col.key ? " ▾" : ""}
                 </button>
@@ -1018,9 +985,9 @@ function TopTable(props: {
                 </td>
               ))}
               <td style={cell}>
-                <button type="button" onClick={() => props.onShow(r.i)} style={{ ...pillButton, minHeight: 30 }}>
+                <Button size="condensed" onClick={() => props.onShow(r.i)}>
                   Show
-                </button>
+                </Button>
               </td>
             </tr>
           ))}
