@@ -121,7 +121,7 @@ export function takeAutoSnapshot(payload: PagePayload, onProgress: (text: string
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => {
       window.removeEventListener("message", onMessage);
-      reject(new Error("The browser extension did not finish the snapshot in time. Try again, or use “Open the page”."));
+      reject(new Error("The browser extension did not finish the snapshot in time. Try again, or take it “By hand”."));
     }, timeoutMs);
     function onMessage(event: MessageEvent) {
       if (event.source !== window || !isExtensionMessage(event.data)) return;

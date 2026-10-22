@@ -24,3 +24,15 @@ export function deviceName(device: string): string {
   const names: Record<string, string> = { desktop: "Desktop", tablet: "Tablet", mobile: "Mobile", all: "Desktop" };
   return names[device] ?? device;
 }
+
+/** "Today, 11:16", "Yesterday, 09:02", "Oct 18" (or "Oct 18, 2025" in another year). */
+export function formatRelative(iso: string, now: Date = new Date()): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((day(now) - day(d)) / 86400000);
+  const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (days === 0) return `Today, ${time}`;
+  if (days === 1) return `Yesterday, ${time}`;
+  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}) });
+}

@@ -20,6 +20,18 @@ docs = [{
     "description": json.dumps({"v": 1, "a": "Astroshop", "p": "x", "d": "desktop"}),
     "content": snapshot, "modificationInfo": {"createdTime": "2026-10-20T13:09:00Z"},
 }]
+# Many more snapshots, each with its thumbnail: the list must stay quick.
+PIXEL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+for i in range(40):
+    docs.append({
+        "id": f"old-{i}", "version": "1", "name": f"Footprints · /product/P{i} · 2026-09-01 10:00", "type": "footprints-snapshot",
+        "description": json.dumps({"v": 2, "a": "Astroshop" if i % 4 else "easyTrade", "p": "x", "d": "mobile" if i % 5 == 0 else "desktop", "c": "auto", "l": f"/product/P{i % 25}"}),
+        "content": snapshot, "modificationInfo": {"createdTime": f"2026-09-{1 + i % 28:02d}T10:00:00Z"},
+    })
+    docs.append({
+        "id": f"thumb-{i}", "version": "1", "name": f"Footprints thumbnail · {i % 4} zones", "type": "footprints-thumbnail",
+        "description": json.dumps({"v": 1, "s": f"old-{i}"}), "content": PIXEL, "modificationInfo": {"createdTime": "2026-09-01T10:00:00Z"},
+    })
 
 script = """
 window.__docs = %s;
@@ -41,23 +53,40 @@ window.__dt = { queries: [], rows: (q) => {
 (HERE / "app_harness.html").write_text(f"""<!doctype html><html><head><meta charset="utf-8"></head><body>
 <link rel="stylesheet" href="app_harness.css"><div id="root"></div><script>{script}</script><script src="app_harness.js"></script></body></html>""")
 
+docs_of = lambda pg, t: pg.evaluate(f"window.__docs.filter(d => d.type === '{t}').map(d => [d.id, d.name, d.description])")
+
 with sync_playwright() as p:
     b = p.chromium.launch()
     pg = b.new_page(viewport={"width": 1400, "height": 1000})
     errors = []
     pg.on("pageerror", lambda e: errors.append(str(e)))
     pg.goto((HERE / "app_harness.html").as_uri())
-    pg.wait_for_selector("text=Your snapshots")
-    pg.wait_for_selector("[role=listitem]")
-    pg.wait_for_timeout(500)
+    pg.wait_for_selector("h2:has-text('Snapshots')")
+    pg.wait_for_selector("[data-snapshot]")
+    pg.wait_for_timeout(800)
     count = lambda part: sum(part in q for q in pg.evaluate("window.__dt.queries"))
-    print("1. snapshots screen: page-list queries before opening the picker:", count("by: {fp_page}"))
-    print("   saved snapshots listed:", pg.locator("[role=listitem]").all_inner_texts())
-    pg.click("button:has-text('Choose a page')")
+    downloads = pg.evaluate("window.__downloads || []")
+    print("1. snapshots screen: page-list queries:", count("by: {fp_page}"), "| cards:", pg.locator("[data-snapshot]").count(),
+          "| snapshot contents downloaded:", sum(not d.startswith("thumb-") for d in downloads), "| thumbnails downloaded:", sum(d.startswith("thumb-") for d in downloads),
+          "| pictures shown:", pg.locator("[data-snapshot] img").count())
+    print("   first cards:", [t.replace("\n", " / ") for t in pg.locator("[data-snapshot]").all_inner_texts()[:3]])
+    print("   sections:", pg.locator("main h3").all_inner_texts(), "| older:", pg.locator("button:has-text('older')").all_inner_texts())
+    pg.mouse.wheel(0, 3000); pg.wait_for_timeout(800)
+    print("   after scrolling, thumbnails downloaded:", sum(d.startswith("thumb-") for d in pg.evaluate("window.__downloads || []")))
+    pg.mouse.wheel(0, -6000); pg.wait_for_timeout(200)
+    pg.click("[role=radiogroup][aria-label=Device] >> text=Mobile"); pg.wait_for_timeout(200)
+    print("   device filter Mobile:", pg.locator("[data-snapshot]").count(), "cards")
+    pg.click("[role=radiogroup][aria-label=Device] >> text=All"); pg.wait_for_timeout(200)
+    pg.screenshot(path=str(HERE / "app-snapshots.png"), full_page=False)
+
+    pg.click("button:has-text('New snapshot')")
+    pg.wait_for_selector("[role=dialog][aria-label='New snapshot']")
+    print("2. panel open; page-list queries still:", count("by: {fp_page}"))
+    pg.click("[role=dialog] button:has-text('Choose a page')")
     pg.wait_for_selector("[role=option]:has-text('product/P0')")
-    print("2. picker opened: page-list queries:", count("by: {fp_page}"), "| rows:", pg.locator("[role=option]").count())
+    print("   picker opened: page-list queries:", count("by: {fp_page}"), "| rows:", pg.locator("[role=option]").count())
     pg.click("[role=option]:has-text('/ (home page)')")
-    print("   capture buttons:", pg.locator("button:has-text('snapshot'), button:has-text('Open the page')").all_inner_texts())
+    print("   ways to take it:", [t.split("\n")[0] for t in pg.locator("[role=radio]").all_inner_texts()])
     # The extension (simulated): a desktop snapshot reports its progress, shown as a bar.
     pg.evaluate("""() => {
       window.postMessage({ source: 'footprints-extension', type: 'pong', version: '0.5.2' }, '*');
@@ -71,17 +100,21 @@ with sync_playwright() as p:
       });
     }""")
     pg.wait_for_timeout(300)
-    pg.click("button:has-text('Desktop snapshot')")
+    pg.click("[role=dialog] button:has-text('Take snapshot')")
     pg.wait_for_timeout(900)
-    print("   progress bar:", pg.locator("text=64%").count() == 1, "|", pg.inner_text("[role=status]").replace("\n", " ")[:90])
+    print("   progress bar:", pg.locator("text=64%").count() == 1, "|", pg.inner_text("[role=dialog] [role=status]").replace("\n", " ")[:90])
     pg.screenshot(path=str(HERE / "app-progress.png"))
     pg.wait_for_selector("text=Desktop snapshot saved", timeout=8000)
     print("   then:", pg.inner_text("text=Desktop snapshot saved"))
-    pg.click("[role=listitem] >> nth=0")
+    pg.keyboard.press("Escape"); pg.wait_for_timeout(200)
+    print("   Escape closes the panel:", pg.locator("[role=dialog][aria-label='New snapshot']").count() == 0)
+
+    pg.click("[data-snapshot='doc-0']")
     pg.wait_for_selector("text=Suggest zones", timeout=10000)
-    print("3. analysis screen:", pg.inner_text("h2"), "|", pg.locator("h2 + p").inner_text())
-    print("   filters:", [t.split("\n")[0] for t in pg.locator("section[aria-label=Filters] label, section[aria-label=Filters] span").all_inner_texts()][:4])
-    print("   device filter gone:", pg.locator("text=Tablet").count() == 0)
+    pg.wait_for_timeout(500)
+    print("3. analysis screen:", pg.inner_text("h2"), "|", pg.inner_text("[data-facts]"))
+    print("   filters:", [t.split("\n")[0] for t in pg.locator("[aria-label=Filters] label").all_inner_texts()])
+    print("   thumbnail made for the older snapshot:", [d for d in docs_of(pg, "footprints-thumbnail") if '"doc-0"' in d[2]])
     pg.screenshot(path=str(HERE / "app-analysis.png"))
     # Turn zones on and off quickly, several times: every change is saved, none is refused.
     img = pg.locator("img").first.bounding_box()
@@ -93,19 +126,28 @@ with sync_playwright() as p:
     shown = pg.locator("[data-zone]").count()
     print("   quick clicks: error shown:", pg.locator("text=Could not save").count() > 0, "| zones on:", shown, "| saved:", len(saved["zones"]) if saved else None,
           "| version:", pg.evaluate("window.__docs.find(d => d.id === 'doc-0').version"))
-    pg.click("button:has-text('All snapshots')")
-    pg.wait_for_selector("text=Your snapshots")
-    print("4. back to the list: OK")
+    print("   thumbnail name now:", [d[1] for d in docs_of(pg, "footprints-thumbnail") if '"doc-0"' in d[2]])
+    pg.click("button[aria-label='All snapshots']")
+    pg.wait_for_selector("[data-snapshot='doc-0'] img", timeout=5000)
+    print("   thumbnail size (KB):", pg.evaluate("Math.round(window.__docs.find(d => d.type === 'footprints-thumbnail' && d.description.includes('doc-0')).content.size / 1024)"),
+          "| snapshot size (KB):", pg.evaluate("Math.round(JSON.stringify(window.__docs.find(d => d.id === 'doc-0').content).length / 1024)"))
+    pg.locator("[data-snapshot='doc-0']").screenshot(path=str(HERE / "app-card.png"))
+    print("4. back to the list; its card:", pg.inner_text("[data-snapshot='doc-0']").replace("\n", " / "))
     # A snapshot arriving from the extension is saved and opened.
     s2 = dict(snapshot, capturedAt="2026-10-21T12:00:00Z", capture="auto")
     pg.evaluate("s => window.postMessage({ source: 'footprints-extension', type: 'snapshot', deliveryId: 'd1', snapshot: s }, '*')", s2)
-    pg.wait_for_selector("button:has-text('All snapshots')", timeout=10000)
+    pg.wait_for_selector("button[aria-label='All snapshots']", timeout=10000)
     pg.wait_for_selector("text=Suggest zones", timeout=10000)
-    print("5. new snapshot opened automatically:", pg.locator("h2 + p").inner_text())
-    pg.click("button:has-text('All snapshots')")
-    pg.wait_for_selector("text=Your snapshots")
-    pg.wait_for_timeout(300)
-    print("   list now:", pg.locator("[role=listitem]").all_inner_texts())
-    pg.screenshot(path=str(HERE / "app-snapshots.png"), full_page=True)
+    pg.wait_for_timeout(500)
+    print("5. new snapshot opened automatically:", pg.inner_text("[data-facts]"))
+    new_id = pg.evaluate("window.__docs.find(d => d.type === 'footprints-snapshot').id")
+    print("   its thumbnails (exactly one):", len([d for d in docs_of(pg, "footprints-thumbnail") if f'"{new_id}"' in d[2]]))
+    pg.click("button[aria-label='More actions']"); pg.wait_for_timeout(300)
+    pg.click("[role=menuitem]:has-text('Delete snapshot')"); pg.wait_for_timeout(200)
+    pg.click("[role=alert] button:has-text('Delete')")
+    pg.wait_for_selector("h2:has-text('Snapshots')")
+    pg.wait_for_timeout(500)
+    print("6. deleted: snapshot gone:", pg.evaluate(f"!window.__docs.some(d => d.id === '{new_id}')"),
+          "| thumbnail gone:", len([d for d in docs_of(pg, "footprints-thumbnail") if f'"{new_id}"' in d[2]]) == 0)
     print("page errors:", errors or "none")
     b.close()

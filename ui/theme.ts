@@ -34,5 +34,7 @@ body { color: ${c.ink}; font-family: ${font}; font-size: 14px; line-height: 1.43
 * { box-sizing: border-box; }
 button, select, input { font-family: inherit; font-size: inherit; color: inherit; }
 button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid ${Colors.Border.Primary.Accent}; outline-offset: 2px; }
+.fp-card { transition: border-color .12s, box-shadow .12s; }
+.fp-card:hover { border-color: ${Colors.Border.Primary.Accent} !important; box-shadow: 0 2px 10px rgba(11,86,229,0.12); }
 @keyframes fp-pulse { 0%, 100% { opacity: .45 } 50% { opacity: .9 } }
 `;

@@ -4,11 +4,15 @@
  * - Zones: the page opens with no zone. Pointing at it outlines the block
  *   under the pointer (any block of the page, clicked or not); a click turns
  *   it into a zone, which stays on and shows the chosen metric; another click
- *   turns it off. The card of a zone lists the blocks around it, from the
- *   smallest to the largest, to pick the right one. Zones and their names are
- *   saved with the snapshot.
+ *   turns it off. The "i" on a zone shows its details in the side panel,
+ *   with the blocks around it, from the smallest to the largest, to pick the
+ *   right one. Zones and their names are saved with the snapshot.
  * - Click heatmap and Scroll heatmap: read through their colors only.
  * - Table: the clicked elements of the page, sortable.
+ *
+ * One toolbar on top; the page on a grey ground at the size chosen (Fit,
+ * 75%, 50%); a side panel next to it that is always there, so the page keeps
+ * its size when details open.
  *
  * Numbers are recomputed from the current filters; the snapshot only stores
  * the picture and the map of the page.
@@ -16,7 +20,7 @@
 import { CSSProperties, KeyboardEvent, MouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { HEAT_CELL, ZONE_MAX_ELEMENTS } from "../dql/queries";
 import type { ClickPosition, Conversion, ElementConversion, PageElement, ScrollDepth } from "../hooks/data";
-import { formatInt, formatWhen } from "../lib/format";
+import { formatInt } from "../lib/format";
 import {
   chainOf,
   depthReachedBy,
@@ -40,14 +44,14 @@ import type { Box, Snapshot } from "../lib/snapshots";
 import { usePersistentState } from "../lib/storage";
 import { c } from "../theme";
 import { Button } from "@dynatrace/strato-components/buttons";
-import { Chip as StratoChip } from "@dynatrace/strato-components/content";
 import { Select } from "@dynatrace/strato-components/forms";
 import { Colors } from "@dynatrace/strato-design-tokens";
-import { AiIcon, ListIcon } from "@dynatrace/strato-icons";
+import { AiIcon, XmarkIcon } from "@dynatrace/strato-icons";
 import { Checkbox, Segmented } from "./Controls";
 import { ClickHeatLayer, HeatLegend, heatRgb, ScrollHeatLayer } from "./Heatmaps";
 
 export type MapMode = "zones" | "clicks" | "scroll" | "table";
+type Zoom = "fit" | "75" | "50";
 
 export interface HeatData {
   rows: ClickPosition[] | null;
@@ -137,7 +141,8 @@ export function SnapshotView(props: {
   const metricOptions = ZONE_METRICS.filter((m) => (hasScroll || !m.needsScroll) && (goal || !m.needsGoal));
   const activeMetric: ZoneMetric = metricOptions.some((m) => m.value === metric) ? metric : metricOptions[0].value;
   const [showLines, setShowLines] = useState(true);
-  const [listOpen, setListOpen] = usePersistentState("fp.zoneList", false);
+  const [storedZoom, setZoom] = usePersistentState<Zoom>("fp.zoom", "fit");
+  const zoom: Zoom = storedZoom === "75" || storedZoom === "50" ? storedZoom : "fit";
   const [hover, setHover] = useState<{ i: number; x: number; y: number } | null>(null);
   const [pointerY, setPointerY] = useState<{ pageY: number; x: number; y: number } | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
@@ -311,11 +316,22 @@ export function SnapshotView(props: {
 
   const metricInfo = ZONE_METRICS.find((m) => m.value === activeMetric)!;
   const hoverI = mode === "zones" && hover && hover.i !== selected ? hover.i : null;
+  const zoomPct = zoom === "50" ? 50 : zoom === "75" ? 75 : 100;
+  const selectedOn = selected !== null && zoneSet.has(selected) ? selected : null;
+
+  function focusZone(i: number) {
+    setSelected(selected === i ? null : i);
+    canvasRef.current?.querySelector(`[data-zone="${CSS.escape(pathOf(i))}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {/* What to show */}
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "10px 18px" }}>
+      {/* One toolbar: the view on the left, what it shows in the middle, actions on the right */}
+      <div
+        role="toolbar"
+        aria-label="Page map"
+        style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px 14px", padding: 8, border: `1px solid ${c.line}`, borderRadius: 9, background: c.surface }}
+      >
         {props.onMode && (
           <Segmented<MapMode>
             label="View"
@@ -331,7 +347,8 @@ export function SnapshotView(props: {
         )}
         {mode === "zones" && (
           <>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, fontWeight: 600, color: c.muted, position: "relative" }}>
+            <Divider />
+            <div style={{ display: "flex", alignItems: "center", gap: 8, color: c.muted, position: "relative" }}>
               <span>Show</span>
               <Select<ZoneMetric> value={activeMetric} onChange={(v) => v && setMetric(v)} aria-label="Metric">
                 <Select.Content>
@@ -350,7 +367,7 @@ export function SnapshotView(props: {
                   e.preventDefault();
                   setShowHelp((v) => !v);
                 }}
-                style={{ width: 28, height: 28, borderRadius: 999, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.muted, cursor: "pointer", fontWeight: 600 }}
+                style={{ width: 24, height: 24, borderRadius: 999, border: `1px solid ${c.lineStrong}`, background: c.surface, color: c.muted, cursor: "pointer", fontWeight: 600, fontSize: 12 }}
               >
                 i
               </button>
@@ -364,80 +381,44 @@ export function SnapshotView(props: {
               )}
             </div>
             {zoneIdx.length > 1 && <HeatLegend low="Lowest" high="Highest" />}
-            <Button variant="emphasized" onClick={suggest}>
-              <Button.Prefix>
-                <AiIcon />
-              </Button.Prefix>
-              Suggest zones
-            </Button>
-            {hasScroll && <Toggle label="Scroll lines" checked={showLines} onChange={setShowLines} />}
-            <div style={{ marginLeft: "auto" }}>
-              <Button variant={listOpen ? "emphasized" : "default"} color={listOpen ? "primary" : "neutral"} onClick={() => setListOpen(!listOpen)} aria-expanded={listOpen}>
-                <Button.Prefix>
-                  <ListIcon />
-                </Button.Prefix>
-                Zone list ({zoneIdx.length})
-              </Button>
-            </div>
           </>
         )}
-        {mode === "clicks" && <HeatLegend low="Fewer clicks" high="More clicks" />}
+        {mode === "clicks" && (
+          <>
+            <Divider />
+            <HeatLegend low="Fewer clicks" high="More clicks" />
+          </>
+        )}
         {mode === "scroll" && (
           <>
+            <Divider />
             <HeatLegend low="Few visits get here" high="All visits" />
-            <Toggle label="Scroll lines" checked={showLines} onChange={setShowLines} />
           </>
+        )}
+        <span style={{ flex: "1 1 0" }} />
+        {mode === "zones" && (
+          <Button variant="emphasized" onClick={suggest}>
+            <Button.Prefix>
+              <AiIcon />
+            </Button.Prefix>
+            Suggest zones
+          </Button>
+        )}
+        {(mode === "zones" || mode === "scroll") && hasScroll && <Toggle label="Scroll lines" checked={showLines} onChange={setShowLines} />}
+        {mode !== "table" && (
+          <Segmented<Zoom>
+            label="Size of the page"
+            value={zoom}
+            onChange={setZoom}
+            options={[
+              { value: "fit", label: "Fit" },
+              { value: "75", label: "75%" },
+              { value: "50", label: "50%" },
+            ]}
+          />
         )}
       </div>
 
-      {/* The context, in a few words */}
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-        <Chip>{snapshot.device === "mobile" ? "Mobile" : snapshot.device === "tablet" ? "Tablet" : "Desktop"} visits</Chip>
-        {props.periodLabel && <Chip>{props.periodLabel}</Chip>}
-        <Chip>{formatInt(pageVisits)} visits</Chip>
-        <Chip title="Share of this period's clicks that land on an element of this snapshot">{formatShare(coverage)} of clicks found</Chip>
-        {goal && <Chip>{goal.loading && !goal.page ? `Goal “${goal.label}”…` : goal.page ? `${formatShare(goal.page.visits ? goal.page.converted / goal.page.visits : 0)} reach “${goal.label}”` : `Goal “${goal.label}”`}</Chip>}
-        <Chip muted>Snapshot of {formatWhen(snapshot.capturedAt)}</Chip>
-        {props.saving && <Chip muted>Saving…</Chip>}
-      </div>
-
-      {/* Always one line here, so the picture does not move when the first zone is turned on. */}
-      {mode === "zones" && !suggestNote && (
-        <div style={{ fontSize: 14, color: c.muted }}>
-          {zoneIdx.length === 0
-            ? "Point at the page to see its blocks; click one to turn it into a zone. Or let Footprints suggest the zones that get the most clicks."
-            : "Click a block to turn it into a zone, click a zone to turn it off; the “i” on a zone opens its details."}
-        </div>
-      )}
-      {mode === "zones" && suggestNote && (
-        <div role="status" style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", padding: "10px 12px", borderRadius: 10, background: c.accentSoft, fontSize: 14 }}>
-          <span>✦ {suggestNote}</span>
-          <Button onClick={() => setSuggestNote(null)} aria-label="Dismiss">
-            OK
-          </Button>
-        </div>
-      )}
-      {mode === "zones" && overlapNote && (
-        <div role="status" style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", padding: "8px 12px", borderRadius: 10, background: c.surfaceAlt, fontSize: 14 }}>
-          <span>{overlapNote}</span>
-          <Button size="condensed" onClick={() => setOverlapNote(null)} aria-label="Dismiss">
-            OK
-          </Button>
-        </div>
-      )}
-      {mode === "clicks" && heat && (
-        <div style={{ fontSize: 13, color: c.muted }}>
-          {heat.loading
-            ? "Placing the clicks…"
-            : heat.error
-              ? `Could not load click positions: ${heat.error}`
-              : placed
-                ? `${formatInt(placedTotal)} clicks placed: ${formatShare(placedTotal ? placed.exact / placedTotal : 0)} at their exact spot, ${formatShare(placedTotal ? placed.approx / placedTotal : 0)} estimated within their element${
-                    placed.unplaced ? ` · ${formatInt(placed.unplaced)} clicks are on elements not on this snapshot` : ""
-                  }.`
-                : ""}
-        </div>
-      )}
       {notes.map((n) => (
         <div key={n} role="note" style={{ padding: "10px 12px", borderRadius: 10, background: c.warnSoft, color: c.warnInk, fontSize: 14 }}>
           {n}
@@ -461,202 +442,258 @@ export function SnapshotView(props: {
         />
       ) : (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
-          {/* The page */}
-          <div
-            ref={canvasRef}
-            onMouseMove={(e) => {
-              if (mode === "zones") {
+          {/* The page, on a grey ground, at the size chosen */}
+          <div style={{ flex: "999 1 560px", minWidth: 0, padding: 16, border: `1px solid ${c.line}`, borderRadius: 9, background: c.surfaceAlt }}>
+            <div
+              ref={canvasRef}
+              onMouseMove={(e) => {
+                if (mode === "zones") {
+                  const i = blockAt(e);
+                  setHover(i !== null ? { i, x: e.clientX, y: e.clientY } : null);
+                }
+                if (mode === "scroll") {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setPointerY({ pageY: ((e.clientY - rect.top) / rect.height) * H, x: e.clientX, y: e.clientY });
+                }
+              }}
+              onMouseLeave={() => {
+                setHover(null);
+                setPointerY(null);
+              }}
+              onClick={(e) => {
+                if (mode !== "zones") return;
                 const i = blockAt(e);
-                setHover(i !== null ? { i, x: e.clientX, y: e.clientY } : null);
-              }
-              if (mode === "scroll") {
-                const rect = e.currentTarget.getBoundingClientRect();
-                setPointerY({ pageY: ((e.clientY - rect.top) / rect.height) * H, x: e.clientX, y: e.clientY });
-              }
-            }}
-            onMouseLeave={() => {
-              setHover(null);
-              setPointerY(null);
-            }}
-            onClick={(e) => {
-              if (mode !== "zones") return;
-              const i = blockAt(e);
-              if (i !== null) toggle(i);
-            }}
-            style={{
-              flex: "999 1 560px",
-              minWidth: 0,
-              position: "relative",
-              border: `1px solid ${c.lineStrong}`,
-              borderRadius: 10,
-              overflow: "hidden",
-              background: "#FFFFFF",
-              cursor: mode === "zones" ? "pointer" : "default",
-            }}
-          >
-            <img src={snapshot.image.dataUrl} alt={`Snapshot of ${snapshot.title || snapshot.url}`} draggable={false} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} />
-            {mode === "clicks" && placed && <ClickHeatLayer cells={placed.cells} width={W} height={H} />}
-            {mode === "scroll" && hasScroll && <ScrollHeatLayer scroll={scroll!} height={H} />}
+                if (i !== null) toggle(i);
+              }}
+              style={{
+                width: `${zoomPct}%`,
+                margin: "0 auto",
+                position: "relative",
+                background: "#FFFFFF",
+                boxShadow: "0 2px 10px rgba(0,0,0,0.10)",
+                cursor: mode === "zones" ? "pointer" : "default",
+              }}
+            >
+              <img src={snapshot.image.dataUrl} alt={`Snapshot of ${snapshot.title || snapshot.url}`} draggable={false} style={{ display: "block", width: "100%", height: "auto", userSelect: "none" }} />
+              {mode === "clicks" && placed && <ClickHeatLayer cells={placed.cells} width={W} height={H} />}
+              {mode === "scroll" && hasScroll && <ScrollHeatLayer scroll={scroll!} height={H} />}
 
-            {mode === "zones" &&
-              zoneIdx
-                .slice()
-                .sort((a, b) => map.elements[b].box.w * map.elements[b].box.h - map.elements[a].box.w * map.elements[a].box.h)
-                .map((i) => {
-                  const v = valueOf(i);
-                  const h = zoneColor(ratioOf(i));
-                  const isSel = selected === i;
-                  const showInfo = isSel || hover?.i === i;
-                  return (
-                    <div
-                      key={i}
-                      data-zone={pathOf(i)}
-                      style={{
-                        position: "absolute",
-                        ...at(map.elements[i].box),
-                        boxSizing: "border-box",
-                        borderRadius: 4,
-                        border: isSel ? `3px solid ${BLUE}` : `2px solid ${h.line}`,
-                        background: h.fill,
-                        pointerEvents: "none",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelected(isSel ? null : i);
-                        }}
-                        title={`${nameOf(i)} — click for details`}
+              {mode === "zones" &&
+                zoneIdx
+                  .slice()
+                  .sort((a, b) => map.elements[b].box.w * map.elements[b].box.h - map.elements[a].box.w * map.elements[a].box.h)
+                  .map((i) => {
+                    const v = valueOf(i);
+                    const h = zoneColor(ratioOf(i));
+                    const isSel = selected === i;
+                    const showInfo = isSel || hover?.i === i;
+                    return (
+                      <div
+                        key={i}
+                        data-zone={pathOf(i)}
                         style={{
                           position: "absolute",
-                          left: 3,
-                          top: 3,
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          border: 0,
-                          fontSize: 12,
-                          fontWeight: 600,
-                          background: isSel ? BLUE : h.bg,
-                          color: isSel ? "#FFFFFF" : h.fg,
-                          boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
-                          pointerEvents: "auto",
-                          cursor: "pointer",
+                          ...at(map.elements[i].box),
+                          boxSizing: "border-box",
+                          borderRadius: 4,
+                          border: isSel ? `3px solid ${BLUE}` : `2px solid ${h.line}`,
+                          background: h.fill,
+                          pointerEvents: "none",
                         }}
                       >
-                        {formatShare(v)}
-                      </button>
-                      {showInfo && (
                         <button
                           type="button"
-                          aria-label={`Details of ${nameOf(i)}`}
-                          title="Details"
                           onClick={(e) => {
                             e.stopPropagation();
                             setSelected(isSel ? null : i);
                           }}
+                          title={`${nameOf(i)} — click for details`}
                           style={{
                             position: "absolute",
-                            right: 3,
+                            left: 3,
                             top: 3,
-                            width: 22,
-                            height: 22,
+                            padding: "2px 8px",
                             borderRadius: 999,
                             border: 0,
-                            background: BLUE,
-                            color: "#FFFFFF",
-                            fontSize: 13,
+                            fontSize: 12,
                             fontWeight: 600,
-                            fontStyle: "italic",
-                            fontFamily: "Georgia, serif",
-                            boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                            background: isSel ? BLUE : h.bg,
+                            color: isSel ? "#FFFFFF" : h.fg,
+                            boxShadow: "0 1px 3px rgba(0,0,0,0.25)",
                             pointerEvents: "auto",
                             cursor: "pointer",
                           }}
                         >
-                          i
+                          {formatShare(v)}
                         </button>
-                      )}
-                    </div>
-                  );
-                })}
+                        {showInfo && (
+                          <button
+                            type="button"
+                            aria-label={`Details of ${nameOf(i)}`}
+                            title="Details"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelected(isSel ? null : i);
+                            }}
+                            style={{
+                              position: "absolute",
+                              right: 3,
+                              top: 3,
+                              width: 22,
+                              height: 22,
+                              borderRadius: 999,
+                              border: 0,
+                              background: BLUE,
+                              color: "#FFFFFF",
+                              fontSize: 13,
+                              fontWeight: 600,
+                              fontStyle: "italic",
+                              fontFamily: "Georgia, serif",
+                              boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                              pointerEvents: "auto",
+                              cursor: "pointer",
+                            }}
+                          >
+                            i
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
 
-            {showLines &&
-              mode !== "clicks" &&
-              lineGroups.map((g) => (
-                <div key={g.d} style={{ position: "absolute", left: 0, right: 0, top: `${(100 * g.d) / H}%`, borderTop: `2px dashed rgba(11,86,229,0.85)`, pointerEvents: "none" }}>
-                  <span style={{ position: "absolute", right: 8, top: -20, padding: "1px 8px", borderRadius: "6px 6px 0 0", background: BLUE, color: "#FFFFFF", fontSize: 11, fontWeight: 600 }}>
-                    {joinShares(g.shares)} of visits see down to here
-                  </span>
-                </div>
-              ))}
+              {showLines &&
+                mode !== "clicks" &&
+                lineGroups.map((g) => (
+                  <div key={g.d} style={{ position: "absolute", left: 0, right: 0, top: `${(100 * g.d) / H}%`, borderTop: `2px dashed rgba(11,86,229,0.85)`, pointerEvents: "none" }}>
+                    <span style={{ position: "absolute", right: 8, top: -20, padding: "1px 8px", borderRadius: "6px 6px 0 0", background: BLUE, color: "#FFFFFF", fontSize: 11, fontWeight: 600 }}>
+                      {joinShares(g.shares)} of visits see down to here
+                    </span>
+                  </div>
+                ))}
 
-            {hoverI !== null && !zoneSet.has(hoverI) && <Outline box={map.elements[hoverI].box} at={at} dashed />}
-            {preview !== null && <Outline box={map.elements[preview].box} at={at} />}
-
-            {mode === "zones" && selected !== null && zoneSet.has(selected) && (
-              <ZoneCard
-                box={map.elements[selected].box}
-                W={W}
-                H={H}
-                name={nameOf(selected)}
-                numbers={numbersOf(selected)}
-                counting={counts.get(countKeyOf(selected)) === "loading"}
-                goal={goal ? { label: goal.label, page: goal.page } : null}
-                chain={chainOf(map, tree, selected).map((j) => ({ i: j, name: nameOf(j) }))}
-                current={selected}
-                onPick={(j) => replaceZone(selected, j)}
-                onPreview={setPreview}
-                onOff={() => toggle(selected)}
-                onClose={() => setSelected(null)}
-              />
-            )}
+              {hoverI !== null && !zoneSet.has(hoverI) && <Outline box={map.elements[hoverI].box} at={at} dashed />}
+              {preview !== null && <Outline box={map.elements[preview].box} at={at} />}
+            </div>
           </div>
 
-          {/* The zones turned on, ranked by the metric, with renaming */}
-          {mode === "zones" && listOpen && (
-            <aside aria-label="Zones" style={{ flex: "1 1 300px", minWidth: 0, position: "sticky", top: 12, maxHeight: "calc(100vh - 24px)", overflow: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
-              {zoneIdx.length === 0 ? (
-                <div style={{ fontSize: 13, color: c.muted }}>No zone yet: click a block of the page to turn it into a zone.</div>
-              ) : (
-                <>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
-                    <span style={{ fontSize: 13, color: c.muted }}>
-                      {zoneIdx.length} zones · by {metricInfo.label.toLowerCase()}
-                    </span>
-                    <Button
-                      size="condensed"
-                      onClick={() => {
-                        setZones([]);
-                        setSelected(null);
-                      }}
-                    >
-                      Turn all off
-                    </Button>
+          {/* The side panel: always there, so the page keeps its size */}
+          <aside
+            aria-label={mode === "zones" ? "Zones" : mode === "clicks" ? "About the click heatmap" : "About the scroll heatmap"}
+            style={{
+              flex: "1 1 300px",
+              maxWidth: 400,
+              minWidth: 0,
+              position: "sticky",
+              top: 12,
+              maxHeight: "calc(100vh - 24px)",
+              overflow: "auto",
+              display: "flex",
+              flexDirection: "column",
+              border: `1px solid ${c.line}`,
+              borderRadius: 9,
+              background: c.surface,
+            }}
+          >
+            {mode === "zones" && (
+              <>
+                {suggestNote && <PanelNote onClose={() => setSuggestNote(null)}>✦ {suggestNote}</PanelNote>}
+                {overlapNote && <PanelNote onClose={() => setOverlapNote(null)}>{overlapNote}</PanelNote>}
+                {selectedOn !== null && (
+                  <ZoneDetails
+                    name={nameOf(selectedOn)}
+                    metric={activeMetric}
+                    numbers={numbersOf(selectedOn)}
+                    counting={counts.get(countKeyOf(selectedOn)) === "loading"}
+                    goal={goal ? { label: goal.label, page: goal.page } : null}
+                    chain={chainOf(map, tree, selectedOn).map((j) => ({ i: j, name: nameOf(j) }))}
+                    current={selectedOn}
+                    onPick={(j) => replaceZone(selectedOn, j)}
+                    onPreview={setPreview}
+                    onOff={() => toggle(selectedOn)}
+                    onClose={() => setSelected(null)}
+                  />
+                )}
+                <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+                  {zoneIdx.length === 0 ? (
+                    <>
+                      <div style={{ fontWeight: 600 }}>No zone yet</div>
+                      <div style={{ fontSize: 13, color: c.muted }}>
+                        Point at the page to see its blocks, and click one to turn it into a zone; click it again to turn it off. Or let Footprints suggest the zones that get the most
+                        clicks.
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                        <span style={{ fontSize: 13, fontWeight: 600 }}>
+                          Zones on ({zoneIdx.length}) · by {metricInfo.label.toLowerCase()}
+                        </span>
+                        <Button
+                          size="condensed"
+                          onClick={() => {
+                            setZones([]);
+                            setSelected(null);
+                          }}
+                        >
+                          Turn all off
+                        </Button>
+                      </div>
+                      {zoneIdx
+                        .slice()
+                        .sort((a, b) => (valueOf(b) ?? -1) - (valueOf(a) ?? -1))
+                        .map((i) => (
+                          <ZoneRow
+                            key={i}
+                            value={formatShare(valueOf(i))}
+                            ratio={ratioOf(i)}
+                            name={nameOf(i)}
+                            suggested={props.names[pathOf(i)] ? clean(map.elements[i].name) : null}
+                            selected={selected === i}
+                            onSelect={() => focusZone(i)}
+                            onRemove={() => toggle(i)}
+                            onRename={(name) => rename(i, name)}
+                          />
+                        ))}
+                      <div style={{ fontSize: 12, color: c.muted }}>The “i” on a zone shows its details here.</div>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+            {mode === "clicks" && (
+              <PanelText title="Click heatmap">
+                <p style={{ margin: 0 }}>Every click of the period, placed on the element that was clicked. Red where clicks pile up, blue where there are few.</p>
+                {heat?.loading && <p style={{ margin: 0, color: c.muted }}>Placing the clicks…</p>}
+                {heat?.error && <p style={{ margin: 0, color: c.criticalInk }}>Could not load click positions: {heat.error}</p>}
+                {placed && !heat?.loading && (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6 }}>
+                    <Stat label="Clicks placed" value={formatInt(placedTotal)} accent />
+                    <Stat label="At their exact spot" value={formatShare(placedTotal ? placed.exact / placedTotal : 0)} title="Clicks placed where they happened, measured at the visitor's window width" />
+                    <Stat label="Estimated in their element" value={formatShare(placedTotal ? placed.approx / placedTotal : 0)} />
+                    <Stat label="On elements not here" value={formatInt(placed.unplaced)} title="Clicks on elements that are not on this snapshot" />
                   </div>
-                  {zoneIdx
-                    .slice()
-                    .sort((a, b) => (valueOf(b) ?? -1) - (valueOf(a) ?? -1))
-                    .map((i) => (
-                      <ZoneRow
-                        key={i}
-                        value={formatShare(valueOf(i))}
-                        ratio={ratioOf(i)}
-                        name={nameOf(i)}
-                        suggested={props.names[pathOf(i)] ? clean(map.elements[i].name) : null}
-                        selected={selected === i}
-                        onSelect={() => {
-                          setSelected(selected === i ? null : i);
-                          canvasRef.current?.querySelector(`[data-zone="${CSS.escape(pathOf(i))}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
-                        }}
-                        onRemove={() => toggle(i)}
-                        onRename={(name) => rename(i, name)}
+                )}
+              </PanelText>
+            )}
+            {mode === "scroll" && hasScroll && (
+              <PanelText title="Scroll heatmap">
+                <p style={{ margin: 0 }}>How far down the page visits get. Red near the top, where everybody is; blue down where few visits arrive. Point at the page to read the share at any height.</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {[0.75, 0.5, 0.25].map((share) => {
+                    const d = depthReachedBy(scroll, share);
+                    return (
+                      <Stat
+                        key={share}
+                        label={`${Math.round(share * 100)}% of visits see`}
+                        value={d === null ? "–" : d >= H ? "The whole page" : `The top ${Math.max(1, Math.round((100 * d) / H))}% of the page`}
                       />
-                    ))}
-                </>
-              )}
-            </aside>
-          )}
+                    );
+                  })}
+                </div>
+                <p style={{ margin: 0, color: c.muted, fontSize: 12 }}>{formatInt(scroll!.visits)} visits in the period.</p>
+              </PanelText>
+            )}
+          </aside>
         </div>
       )}
 
@@ -675,14 +712,6 @@ function joinShares(shares: number[]): string {
   return p.length === 1 ? p[0] : `${p.slice(0, -1).join(", ")} and ${p[p.length - 1]}`;
 }
 
-
-function Chip(props: { children: ReactNode; muted?: boolean; title?: string }) {
-  return (
-    <span title={props.title} style={{ opacity: props.muted ? 0.75 : 1 }}>
-      <StratoChip>{props.children}</StratoChip>
-    </span>
-  );
-}
 
 function Outline(props: { box: Box; at: (b: Box) => CSSProperties; dashed?: boolean }) {
   return (
@@ -745,12 +774,37 @@ function Stat(props: { label: string; value: string; accent?: boolean; title?: s
 
 const kicker: CSSProperties = { fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em", color: c.muted };
 
-/** The card of a zone: its numbers, and the blocks around it to pick a larger or smaller one. */
-function ZoneCard(props: {
-  box: Box;
-  W: number;
-  H: number;
+function Divider() {
+  return <span aria-hidden="true" style={{ width: 1, height: 24, background: c.line }} />;
+}
+
+/** A short message at the top of the side panel, with a close button. */
+function PanelNote(props: { children: ReactNode; onClose: () => void }) {
+  return (
+    <div role="status" style={{ display: "flex", gap: 8, alignItems: "flex-start", justifyContent: "space-between", padding: "10px 12px 10px 16px", background: c.accentSoft, borderBottom: `1px solid ${c.line}`, fontSize: 13 }}>
+      <span>{props.children}</span>
+      <Button size="condensed" aria-label="Dismiss" onClick={props.onClose}>
+        <Button.Prefix>
+          <XmarkIcon />
+        </Button.Prefix>
+      </Button>
+    </div>
+  );
+}
+
+function PanelText(props: { title: string; children: ReactNode }) {
+  return (
+    <div style={{ padding: "12px 16px", display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
+      <div style={{ fontWeight: 600, fontSize: 14 }}>{props.title}</div>
+      {props.children}
+    </div>
+  );
+}
+
+/** The details of a zone, in the side panel: its numbers, and the blocks around it to pick a larger or smaller one. */
+function ZoneDetails(props: {
   name: string;
+  metric: ZoneMetric;
   numbers: ZoneNumbers;
   counting: boolean;
   goal: { label: string; page: Conversion | null } | null;
@@ -761,53 +815,32 @@ function ZoneCard(props: {
   onOff: () => void;
   onClose: () => void;
 }) {
-  const { box, W, H, numbers: n } = props;
+  const n = props.numbers;
   const approx = n.exact ? "" : "≈ ";
   return (
-    <section
-      aria-label="Selected zone"
-      onClick={(e) => e.stopPropagation()}
-      onMouseMove={(e) => e.stopPropagation()}
-      style={{
-        position: "absolute",
-        zIndex: 5,
-        width: 320,
-        maxWidth: "48%",
-        ...(box.y < H - 560 ? { top: `${(100 * box.y) / H}%` } : { bottom: 8 }),
-        ...(box.x + box.w / 2 < W / 2 ? { left: `calc(${(100 * (box.x + box.w)) / W}% + 12px)` } : { right: `calc(${100 - (100 * box.x) / W}% + 12px)` }),
-        border: `2px solid ${BLUE}`,
-        borderRadius: 12,
-        padding: 12,
-        background: c.surface,
-        color: c.ink,
-        boxShadow: "0 8px 28px rgba(22,25,31,0.25)",
-        fontSize: 13,
-        lineHeight: 1.45,
-        cursor: "default",
-      }}
-    >
+    <section aria-label="Selected zone" style={{ padding: "12px 16px", borderBottom: `1px solid ${c.line}`, display: "flex", flexDirection: "column", gap: 10, fontSize: 13 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
         <div style={{ minWidth: 0 }}>
           <div style={kicker}>Zone</div>
-          <div style={{ fontWeight: 600, fontSize: 15, overflowWrap: "anywhere" }}>{props.name}</div>
+          <div style={{ fontWeight: 600, fontSize: 16, overflowWrap: "anywhere" }}>{props.name}</div>
         </div>
-        <button type="button" aria-label="Close" onClick={props.onClose} style={{ width: 30, height: 30, flex: "none", borderRadius: 8, border: `1px solid ${c.line}`, background: c.surface, color: c.muted, cursor: "pointer" }}>
-          ✕
-        </button>
+        <Button size="condensed" aria-label="Close" onClick={props.onClose}>
+          <Button.Prefix>
+            <XmarkIcon />
+          </Button.Prefix>
+        </Button>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6, marginTop: 8 }}>
-        <Stat label="Click share" value={formatShare(n.share)} accent title="Of all the clicks on the page, the share that happens in this zone" />
-        <Stat label="Click rate" value={n.rate === null ? "–" : `${approx}${formatShare(n.rate)}`} accent title="Of the visits that saw the zone, the share that clicked in it" />
-        <Stat label="Exposure" value={formatShare(n.exposure)} title="Share of visits that scrolled far enough to see the zone" />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 6 }}>
+        <Stat label="Click rate" value={n.rate === null ? "–" : `${approx}${formatShare(n.rate)}`} accent={props.metric === "rate"} title="Of the visits that saw the zone, the share that clicked in it" />
+        <Stat label="Click share" value={formatShare(n.share)} accent={props.metric === "share"} title="Of all the clicks on the page, the share that happens in this zone" />
+        <Stat label="Exposure" value={formatShare(n.exposure)} accent={props.metric === "exposure"} title="Share of visits that scrolled far enough to see the zone" />
         <Stat label="Clicks" value={formatInt(n.clicks)} />
       </div>
-      <div style={{ marginTop: 6, color: c.muted }}>
-        {props.counting ? "Counting the visits that clicked here…" : `${n.exact ? "" : "At least "}${formatInt(n.visits)} visits clicked here.`}
-      </div>
+      <div style={{ color: c.muted }}>{props.counting ? "Counting the visits that clicked here…" : `${n.exact ? "" : "At least "}${formatInt(n.visits)} visits clicked here.`}</div>
       {props.goal && (
-        <div style={{ marginTop: 8, padding: "8px 10px", borderRadius: 8, background: c.surfaceAlt }}>
-          <div style={{ fontSize: 11, color: c.muted }}>Reached “{props.goal.label}” after a click here</div>
-          <div style={{ fontSize: 16, fontWeight: 600 }}>
+        <div style={{ padding: "8px 10px", borderRadius: 8, background: props.metric === "conversion" ? c.accentSoft : c.surfaceAlt }}>
+          <div style={{ fontSize: 12, color: c.muted }}>Reached “{props.goal.label}” after a click here</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>
             {n.conversion === null ? "–" : `${approx}${formatShare(n.conversion)}`}
             {props.goal.page && props.goal.page.visits > 0 && (
               <span style={{ fontSize: 12, fontWeight: 500, color: c.muted }}> · page average {formatShare(props.goal.page.converted / props.goal.page.visits)}</span>
@@ -816,42 +849,46 @@ function ZoneCard(props: {
         </div>
       )}
       {props.chain.length > 1 && (
-        <div style={{ marginTop: 10 }}>
+        <div>
           <div style={{ fontSize: 12, color: c.muted, marginBottom: 4 }}>Pick the block, from the smallest to the largest:</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 3 }} onMouseLeave={() => props.onPreview(null)}>
-            {props.chain.map((l, k) => (
-              <button
-                key={l.i}
-                type="button"
-                onClick={() => props.onPick(l.i)}
-                onMouseEnter={() => props.onPreview(l.i === props.current ? null : l.i)}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  minHeight: 30,
-                  padding: "0 8px",
-                  paddingLeft: 8 + k * 10,
-                  borderRadius: 8,
-                  border: l.i === props.current ? `2px solid ${BLUE}` : `1px solid ${c.line}`,
-                  background: l.i === props.current ? c.accentSoft : c.surface,
-                  color: c.ink,
-                  fontWeight: l.i === props.current ? 700 : 500,
-                  textAlign: "left",
-                  cursor: "pointer",
-                  fontSize: 13,
-                }}
-              >
-                <span aria-hidden="true" style={{ color: c.muted }}>
-                  {k === 0 ? "▪" : "└"}
-                </span>
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span>
-              </button>
-            ))}
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }} onMouseLeave={() => props.onPreview(null)}>
+            {props.chain.map((l, k) => {
+              const on = l.i === props.current;
+              return (
+                <button
+                  key={l.i}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => props.onPick(l.i)}
+                  onMouseEnter={() => props.onPreview(on ? null : l.i)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    minHeight: 28,
+                    padding: "0 8px",
+                    paddingLeft: 8 + k * 10,
+                    borderRadius: 6,
+                    border: 0,
+                    background: on ? c.accentSoft : "transparent",
+                    color: on ? c.accent : c.ink,
+                    fontWeight: on ? 600 : 400,
+                    textAlign: "left",
+                    cursor: "pointer",
+                    fontSize: 13,
+                  }}
+                >
+                  <span aria-hidden="true" style={{ color: c.muted }}>
+                    {k === 0 ? "▪" : "└"}
+                  </span>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.name}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
-      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 10 }}>
+      <div>
         <Button size="condensed" onClick={props.onOff}>
           Turn this zone off
         </Button>
@@ -892,20 +929,19 @@ function ZoneRow(props: {
   }
 
   const h = zoneColor(props.ratio);
-  const iconButton: CSSProperties = { width: 34, height: 34, flex: "none", borderRadius: 8, border: `1px solid ${c.line}`, background: c.surface, color: c.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" };
+  const iconButton: CSSProperties = { width: 28, height: 28, flex: "none", borderRadius: 6, border: 0, background: "transparent", color: c.muted, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" };
   return (
     <div
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 8,
-        padding: "8px 10px",
-        borderRadius: 10,
-        border: props.selected ? `2px solid ${c.accent}` : `1px solid ${c.line}`,
-        background: props.selected ? c.accentSoft : c.surface,
+        gap: 6,
+        padding: "2px 4px",
+        borderRadius: 6,
+        background: props.selected ? c.accentSoft : "transparent",
       }}
     >
-      <span style={{ minWidth: 54, textAlign: "center", padding: "3px 8px", borderRadius: 999, fontWeight: 600, fontSize: 13, background: h.bg, color: h.fg }}>{props.value}</span>
+      <span style={{ minWidth: 50, textAlign: "center", padding: "1px 6px", borderRadius: 999, fontWeight: 600, fontSize: 12, background: h.bg, color: h.fg }}>{props.value}</span>
       {editing ? (
         <input
           ref={inputRef}
@@ -918,8 +954,8 @@ function ZoneRow(props: {
           style={{ flex: 1, minWidth: 0, minHeight: 34, padding: "0 8px", borderRadius: 8, border: `1px solid ${c.accent}`, background: c.surface, color: c.ink, fontSize: 14 }}
         />
       ) : (
-        <button type="button" onClick={props.onSelect} style={{ flex: 1, minWidth: 0, textAlign: "left", border: 0, background: "transparent", color: c.ink, cursor: "pointer", padding: 0, minHeight: 34 }}>
-          <span style={{ display: "block", fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.name}</span>
+        <button type="button" onClick={props.onSelect} style={{ flex: 1, minWidth: 0, textAlign: "left", border: 0, background: "transparent", color: c.ink, cursor: "pointer", padding: 0, minHeight: 30 }}>
+          <span style={{ display: "block", fontWeight: props.selected ? 600 : 400, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{props.name}</span>
           {props.suggested && <span style={{ display: "block", fontSize: 12, color: c.muted }}>Suggested: {props.suggested}</span>}
         </button>
       )}

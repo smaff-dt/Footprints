@@ -11,11 +11,14 @@ interface Doc {
 declare global {
   interface Window {
     __docs: Doc[];
+    __downloads: string[];
   }
 }
+let created = 100;
 const meta = (d: Doc) => ({ id: d.id, version: d.version, name: d.name, type: d.type, description: d.description, modificationInfo: d.modificationInfo });
 async function read(blob: Blob) {
-  return JSON.parse(await blob.text());
+  // JSON documents are kept as objects (tests read them); pictures as blobs.
+  return blob.type.includes("json") ? JSON.parse(await blob.text()) : blob;
 }
 export const documentsClient = {
   async listDocuments(config: { filter: string }) {
@@ -30,11 +33,23 @@ export const documentsClient = {
   async downloadDocumentContent(config: { id: string }) {
     const d = window.__docs.find((x) => x.id === config.id);
     if (!d) throw new Error("not found");
-    return { get: async () => d.content };
+    (window.__downloads ??= []).push(d.id);
+    let content = d.content;
+    if (typeof content === "string" && content.startsWith("data:")) {
+      const [head, body] = content.split(",");
+      const bytes = Uint8Array.from(atob(body), (ch) => ch.charCodeAt(0));
+      content = new Blob([bytes], { type: head.slice(5).split(";")[0] });
+    }
+    return {
+      get: async (type?: string) => {
+        if (type === "blob") return content instanceof Blob ? content : new Blob([JSON.stringify(content)], { type: "application/json" });
+        return content;
+      },
+    };
   },
   async createDocument(config: { body: { name: string; type: string; description?: string; content: Blob } }) {
     const d: Doc = {
-      id: `doc-${window.__docs.length + 1}`,
+      id: `doc-${++created}`,
       version: "1",
       name: config.body.name,
       type: config.body.type,
@@ -52,6 +67,13 @@ export const documentsClient = {
       throw new Error(`Request failed: {"error":{"code":409,"message":"Expected to find document ${d.id} with version ${config.optimisticLockingVersion} but actual version is ${d.version}"}}`);
     }
     d.content = await read(config.body.content);
+    d.version = String(Number(d.version) + 1);
+    return meta(d);
+  },
+  async updateDocumentMetadata(config: { id: string; optimisticLockingVersion: string; body: { name?: string } }) {
+    const d = window.__docs.find((x) => x.id === config.id)!;
+    if (config.optimisticLockingVersion !== d.version) throw new Error("409 version");
+    if (config.body.name) d.name = config.body.name;
     d.version = String(Number(d.version) + 1);
     return meta(d);
   },

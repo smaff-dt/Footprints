@@ -2,10 +2,10 @@
  * Taking a snapshot of the page, through the Footprints browser extension:
  * - Desktop / Mobile: automatic, in a background tab, at the window width
  *   visitors use most, measured at the other common widths too;
- * - Open the page: the live page opens with the clicks drawn on it, to
+ * - By hand: the live page opens with the clicks drawn on it, to
  *   arrange it by hand (cookies, menus, window size) and save a snapshot.
  */
-import { useState } from "react";
+import { ReactNode, useState } from "react";
 import { Button } from "@dynatrace/strato-components/buttons";
 import { ProgressBar } from "@dynatrace/strato-components/content";
 import { DesktopIcon, ExternalLinkIcon, MobileIcon } from "@dynatrace/strato-icons";
@@ -13,7 +13,16 @@ import { Filters, PageScope } from "../dql/queries";
 import { loadClickWidths, loadPageElements, loadPageVisits, loadScrollDepth } from "../hooks/data";
 import { formatInt } from "../lib/format";
 import { copyPayload, PagePayload, planWidths, showOnPage, takeAutoSnapshot, useExtensionVersion, versionAtLeast } from "../lib/extension";
+import { usePersistentState } from "../lib/storage";
 import { c } from "../theme";
+
+type Capture = "desktop" | "mobile" | "custom";
+
+const CAPTURE_OPTIONS: { value: Capture; label: string; detail: string; icon: ReactNode }[] = [
+  { value: "desktop", label: "Desktop", detail: "Automatic, in the background, at the window width most desktop visitors use.", icon: <DesktopIcon /> },
+  { value: "mobile", label: "Mobile", detail: "Automatic, as a phone, at the screen width most mobile visitors use.", icon: <MobileIcon /> },
+  { value: "custom", label: "By hand", detail: "Opens the page so you can close pop-ups, log in or resize the window first.", icon: <ExternalLinkIcon /> },
+];
 
 type Status =
   | { kind: "idle" }
@@ -41,6 +50,8 @@ export function ShowOnPage(props: {
   const upToDate = versionAtLeast(version, NEEDED);
   const updateMessage = `The Footprints extension needs an update (version ${NEEDED} or later; this browser has ${version}): open chrome://extensions, click ↻ on Footprints, then reload this page.`;
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [storedHow, setHow] = usePersistentState<Capture>("fp.capture", "desktop");
+  const how: Capture = CAPTURE_OPTIONS.some((o) => o.value === storedHow) ? storedHow : "desktop";
 
   async function build(filters: Filters = props.filters): Promise<PagePayload> {
     // Scroll depth is a plus: if it fails, the page still shows the clicks.
@@ -126,26 +137,47 @@ export function ShowOnPage(props: {
   }
 
   const busy = status.kind === "working" || status.kind === "auto";
+  const take = () => (how === "custom" ? onShow() : onAuto(how));
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "flex-start" }}>
-        <Button variant="accent" color="primary" onClick={() => onAuto("desktop")} disabled={busy} loading={status.kind === "auto" && status.device === "desktop"}>
-          <Button.Prefix>
-            <DesktopIcon />
-          </Button.Prefix>
-          Desktop snapshot
-        </Button>
-        <Button variant="emphasized" onClick={() => onAuto("mobile")} disabled={busy} loading={status.kind === "auto" && status.device === "mobile"}>
-          <Button.Prefix>
-            <MobileIcon />
-          </Button.Prefix>
-          Mobile snapshot
-        </Button>
-        <Button variant="emphasized" onClick={onShow} disabled={busy} loading={status.kind === "working"}>
-          <Button.Prefix>
-            <ExternalLinkIcon />
-          </Button.Prefix>
-          Open the page
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "stretch", gap: 12 }}>
+      <div role="radiogroup" aria-label="How to take it" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {CAPTURE_OPTIONS.map((o) => {
+          const on = how === o.value;
+          return (
+            <button
+              key={o.value}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              disabled={busy}
+              onClick={() => setHow(o.value)}
+              style={{
+                display: "flex",
+                gap: 12,
+                alignItems: "flex-start",
+                padding: on ? 11 : 12,
+                borderRadius: 9,
+                border: on ? `2px solid ${c.accent}` : `1px solid ${c.line}`,
+                background: on ? c.accentSoft : c.surface,
+                color: c.ink,
+                textAlign: "left",
+                cursor: busy ? "default" : "pointer",
+              }}
+            >
+              <span aria-hidden="true" style={{ display: "flex", color: on ? c.accent : c.muted, fontSize: 20, paddingTop: 2 }}>
+                {o.icon}
+              </span>
+              <span>
+                <span style={{ display: "block", fontWeight: 600 }}>{o.label}</span>
+                <span style={{ display: "block", fontSize: 13, color: c.muted }}>{o.detail}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <Button variant="accent" color="primary" onClick={take} disabled={busy} loading={busy}>
+          {how === "custom" ? "Open the page" : "Take snapshot"}
         </Button>
       </div>
 

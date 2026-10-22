@@ -17,6 +17,7 @@ import { useApplications } from "./hooks/data";
 import { useSnapshotInbox } from "./lib/extension";
 import { labelForKey, loadGroups, newGroupId, PageGroup, storeGroups, StoredGroups } from "./lib/pages";
 import { saveSnapshot, Snapshot } from "./lib/snapshots";
+import { syncThumbnail } from "./lib/thumbnails";
 import { AnalysisScreen } from "./screens/AnalysisScreen";
 import { SnapshotsScreen } from "./screens/SnapshotsScreen";
 import { c, GLOBAL_CSS } from "./theme";
@@ -59,6 +60,8 @@ export function App() {
     async (snapshot: Snapshot) => {
       const label = labelForKey(snapshot.page, groups.groups);
       const id = await saveSnapshot(snapshot, label);
+      // Its small picture for the list is made at once (in the background).
+      void syncThumbnail(id, snapshot, snapshot.zoning?.zones.length ?? 0);
       setListTick((t) => t + 1);
       setSavedNote(`Snapshot of “${label}” saved.`);
       open(id);
@@ -120,13 +123,18 @@ export function App() {
             </AppHeader.NavItem>
           )}
         </AppHeader.NavItems>
-        {screen.kind === "analysis" && (
-          <AppHeader.ActionItems>
-            <AppHeader.ActionButton prefixIcon={<RefreshIcon />} showLabel onClick={() => setRefreshKey((k) => k + 1)}>
-              Refresh data
-            </AppHeader.ActionButton>
-          </AppHeader.ActionItems>
-        )}
+        <AppHeader.ActionItems>
+          <AppHeader.ActionButton
+            prefixIcon={<RefreshIcon />}
+            showLabel
+            onClick={() => {
+              setRefreshKey((k) => k + 1);
+              setListTick((t) => t + 1);
+            }}
+          >
+            Refresh data
+          </AppHeader.ActionButton>
+        </AppHeader.ActionItems>
       </AppHeader>
 
       <main style={{ maxWidth: 1440, margin: "0 auto", padding: "16px 24px 32px", display: "flex", flexDirection: "column", gap: 16 }}>

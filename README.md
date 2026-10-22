@@ -21,23 +21,38 @@ It reads the user interactions captured by Dynatrace Real User Monitoring
 
 Footprints has two screens:
 
-1. **Snapshots** — choose an application and a page (or a page group), take
-   a new snapshot, and find the snapshots you saved (search by page or
-   application). The list of pages is loaded only when you open the page
-   picker.
-2. **Analysis** — opens when a snapshot is saved or picked from the list:
-   the snapshot with its numbers for the period you choose, an optional
-   conversion goal, and the Areas, Click heatmap and Scroll heatmap views (or
-   the List view, without a picture). The numbers come from visits on the
-   snapshot's kind of device.
+1. **Snapshots** — the snapshots you saved, as cards with a small picture of
+   the page, its device, date and number of zones, grouped by application:
+   the latest snapshot of each page comes first, older ones are behind
+   **Show N older snapshots**. Search by page or application, filter by
+   application or device. **New snapshot** opens a side panel: choose the
+   application and the page (or a page group), then how to take it. The list
+   of pages is loaded only when you open the page picker.
+2. **Analysis** — opens when a snapshot is saved or picked from the list. The
+   title row holds the page, one line of context (application, device, date,
+   visits, share of clicks found, conversion to the goal), the **Period** and
+   **Conversion goal** filters and a **⋮** menu (Delete snapshot). Below, one
+   toolbar: the view (Zones, Click heatmap, Scroll heatmap, Table), the
+   metric and its colors, **Suggest zones**, **Scroll lines** and the size of
+   the page (**Fit**, **75%**, **50%**). The page sits on a grey ground with a
+   side panel next to it that never moves the picture: zone details and the
+   zones that are on, or what the heatmap shows. The numbers come from visits
+   on the snapshot's kind of device.
+
+The list of snapshots downloads no snapshot: each one has a second, tiny
+document (`footprints-thumbnail`, the top of the page as a JPEG of about
+10–30 KB, its name holding the zone count), made when the snapshot is saved —
+or, for snapshots saved before thumbnails existed, the first time it is
+opened. Thumbnails are downloaded only for the cards on screen, four at a
+time, once per session.
 
 ### Taking a snapshot
 
 | Option | How |
 |---|---|
-| **Desktop snapshot** | Automatic. The extension loads the page in a background tab at the window width most desktop visitors use, pictures it screen by screen at that window size (so the picture matches the measured map exactly; bars stuck to the bottom, such as cookie banners, are hidden), and measures where every clicked element is at the other common widths (up to 5, covering about 90% of clicks). |
-| **Mobile snapshot** | The same, with the page loaded as a phone shows it (phone width and browser identity), using mobile visits only. |
-| **Open the page** | Manual. The live page opens with the clicks drawn on it; resize the window, accept cookies, open menus, then click **Save snapshot to Footprints**. |
+| **Desktop** | Automatic. The extension loads the page in a background tab at the window width most desktop visitors use, pictures it screen by screen at that window size (so the picture matches the measured map exactly; bars stuck to the bottom, such as cookie banners, are hidden), and measures where every clicked element is at the other common widths (up to 5, covering about 90% of clicks). |
+| **Mobile** | The same, with the page loaded as a phone shows it (phone width and browser identity), using mobile visits only. |
+| **By hand** | Manual. The live page opens with the clicks drawn on it; resize the window, accept cookies, open menus, then click **Save snapshot to Footprints**. |
 
 While an automatic snapshot is taken (a few seconds), Chrome shows a bar
 saying Footprints is debugging the browser: the extension uses Chrome's
@@ -47,7 +62,7 @@ extension waits until they are loaded and ready to draw (a hidden tab
 otherwise leaves pictures blank). The background tab closes by itself. It is shown at 100% zoom even
 if you zoomed the site in Chrome (your own zoom is left as it is).
 
-**Open the page** opens the live page with a small Footprints panel: get the
+**By hand** opens the live page with a small Footprints panel: get the
 page ready as visitors see it (close the cookie banner, open a menu, resize
 the window), then click **Save snapshot to Footprints**. The live page only
 prepares the snapshot; zones, heatmaps and numbers are in the app.
@@ -85,7 +100,7 @@ Dynatrace and follow you across browsers.
 
 | View | What it shows |
 |---|---|
-| **Zones** | The page opens with no zone. Point at it: the block under the pointer is outlined — any block of the page, clicked or not. Click it to turn it into a zone: it stays on and shows the metric chosen in **Show**, colored from blue (lowest among the zones on) to red (highest); a click anywhere in a zone that is on turns it off. Pointing at a zone shows an **i**, which opens its details. Zones never overlap: turning on a zone inside, around or across another turns the other one off. The details card lists the blocks around it, from the smallest to the largest (wrappers exactly as big as the block they hold are skipped), to pick the right one; pointing at a level outlines it first. **Suggest zones** replaces the zones that are on with the 2–3 zones that get the most clicks. **Zone list** ranks the zones that are on, to rename or turn off |
+| **Zones** | The page opens with no zone. Point at it: the block under the pointer is outlined — any block of the page, clicked or not. Click it to turn it into a zone: it stays on and shows the metric chosen in **Show**, colored from blue (lowest among the zones on) to red (highest); a click anywhere in a zone that is on turns it off. Pointing at a zone shows an **i**, which shows its details in the side panel. Zones never overlap: turning on a zone inside, around or across another turns the other one off. The details list the blocks around it, from the smallest to the largest (wrappers exactly as big as the block they hold are skipped), to pick the right one; pointing at a level outlines it first. **Suggest zones** replaces the zones that are on with the 2–3 zones that get the most clicks. The side panel ranks the zones that are on, to rename or turn off |
 | **Click heatmap** | Where visitors click, from the click positions recorded by Dynatrace. A position belongs to the layout the visitor saw, which depends on the window width; each click is moved onto the same element of the snapshot, at the same spot within it (30% from its left, 60% from its top…) when the page was measured at that width, or estimated from how the element's clicks are spread otherwise. Footprints says how many clicks were placed exactly |
 | **Scroll heatmap** | The page colored by the share of visits that get down to each height (red: everyone, blue: few); point anywhere to read the share |
 | **Table** | The clicked elements, sortable by clicks, click share, visits, click rate, exposure or conversion; **Show** turns one into a zone on the picture |
@@ -112,7 +127,7 @@ in it and went on to reach the goal, next to the page average.
 The visits that clicked in a zone are counted by Dynatrace when the zone is
 turned on (one small query per zone), so a visit that clicks several elements
 of a zone counts once. Until the answer arrives, or for zones holding more
-than 400 different clicked elements, the card shows an estimate (≈). The
+than 400 different clicked elements, the details show an estimate (≈). The
 **i** next to the metric explains it. Dashed lines mark where 75%, 50% and 25%
 of visits stop scrolling.
 
@@ -242,7 +257,7 @@ ui/
   are not on the map; their clicks count as "not on this snapshot".
 - Pages longer than 16,000 pixels are cut at that height.
 - Automatic snapshots do not accept cookie banners or open menus: use
-  **Open the page** for that. Pages behind a login work if your browser is
+  **By hand** for that. Pages behind a login work if your browser is
   logged in.
 - Opening a page (automatically or by hand) counts as a visit in the site's
   own analytics.

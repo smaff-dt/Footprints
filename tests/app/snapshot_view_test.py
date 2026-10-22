@@ -36,7 +36,7 @@ def pick_metric(pg, label):
     pg.click(f"[role=option]:has-text('{label}')"); pg.wait_for_timeout(200)
 
 def view(pg, label):
-    pg.click(f"[role=radiogroup] >> text={label}"); pg.wait_for_timeout(200)
+    pg.click(f"[role=radiogroup][aria-label=View] >> text={label}"); pg.wait_for_timeout(200)
 
 def box_of(pg, name):
     """Screen position of the map element whose name starts with `name`."""
@@ -55,7 +55,8 @@ with sync_playwright() as p:
     pg.goto((HERE / "harness.html").as_uri())
     pg.wait_for_selector("img")
     print("1. opens with no zone:", pg.locator("[data-zone]").count() == 0)
-    print("   chips:", pg.locator("span[title], span").filter(has_text="visits").all_inner_texts()[:3])
+    print("   side panel:", pg.inner_text("aside").replace("\n", " ")[:120])
+    img0 = pg.locator("img").bounding_box()
 
     t = box_of(pg, "Add")
     pg.mouse.move(t["x"], t["y"]); pg.wait_for_timeout(100)
@@ -71,9 +72,10 @@ with sync_playwright() as p:
     print("   exact visits asked for:", window_counted := pg.evaluate("window.counted.length"))
     chain = pg.locator("[aria-label='Selected zone'] button").all_inner_texts()
     print("   blocks around it:", [c.strip("▪└ \n") for c in chain if c and c not in ("✕", "Turn this zone off")])
+    print("   page kept its size when the details opened:", pg.locator("img").bounding_box() == img0)
     # pick a larger block from the card
     pg.locator("[aria-label='Selected zone'] button:has-text('Product')").first.click(); pg.wait_for_timeout(200)
-    print("4. larger block picked:", pg.inner_text("[aria-label='Selected zone'] div div").split("\n")[:2], "| zones on:", pg.locator("[data-zone]").count())
+    print("4. larger block picked:", pg.inner_text("[aria-label='Selected zone'] [aria-pressed=true]"), "| zones on:", pg.locator("[data-zone]").count())
     # second click on the same block turns it off
     t2 = box_of(pg, "Product 1")
     pg.mouse.click(t2["x"] + 60, t2["y"] + 60); pg.wait_for_timeout(200)
@@ -91,19 +93,23 @@ with sync_playwright() as p:
     print("   suggest replaces the zones that were on:", pg.locator("[data-zone]").count(), "zones on")
     pick_metric(pg, "Conversion")
     print("   conversion labels:", pg.locator("[data-zone] button").all_inner_texts())
-    pg.click("text=Zone list")
     pg.click("aside [aria-label^=Rename] >> nth=0")
     pg.keyboard.press("Control+A"); pg.keyboard.type("Product grid"); pg.keyboard.press("Enter"); pg.wait_for_timeout(100)
     print("7. renamed; saved zoning:", pg.evaluate("window.zoning[window.zoning.length - 1]"))
     pick_metric(pg, "Click share")
     pg.screenshot(path=str(HERE / "zones.png"), full_page=True)
+    pg.click("[role=radiogroup][aria-label='Size of the page'] >> text=50%"); pg.wait_for_timeout(200)
+    print("   size 50%:", round(pg.locator("img").bounding_box()["width"] / img0["width"], 2))
+    pg.click("[role=radiogroup][aria-label='Size of the page'] >> text=Fit"); pg.wait_for_timeout(200)
 
     view(pg, "Click heatmap")
     pg.mouse.move(t["x"], t["y"]); pg.mouse.click(t["x"], t["y"]); pg.wait_for_timeout(150)
     print("8. click heatmap: no tooltip, no zones:", pg.locator("[role=tooltip]").count() == 0, pg.locator("[data-zone]").count() == 0)
+    print("   panel:", pg.inner_text("aside").replace("\n", " ")[:200])
     view(pg, "Scroll heatmap")
     pg.mouse.move(t["x"], t["y"] + 200); pg.wait_for_timeout(150)
     print("   scroll heatmap tooltip:", pg.inner_text("[role=tooltip]").replace("\n", " "))
+    print("   panel:", pg.inner_text("aside").replace("\n", " ")[:220])
     view(pg, "Table")
     print("9. table rows:", pg.locator("tbody tr").count(), "| first:", pg.locator("tbody tr").first.inner_text().replace("\t", " | ")[:120])
     pg.locator("tbody tr button:has-text('Show')").first.click(); pg.wait_for_timeout(300)
