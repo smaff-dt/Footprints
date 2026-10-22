@@ -50,7 +50,9 @@ window.__dt = { queries: [], rows: (q) => {
 } };
 """ % (json.dumps(docs), json.dumps({"pages": pages, "elements": elements}))
 
-(HERE / "app_harness.html").write_text(f"""<!doctype html><html><head><meta charset="utf-8"></head><body>
+# Pictures as in Dynatrace: data URLs allowed, blob URLs blocked.
+(HERE / "app_harness.html").write_text(f"""<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="img-src 'self' data: file:"></head><body>
 <link rel="stylesheet" href="app_harness.css"><div id="root"></div><script>{script}</script><script src="app_harness.js"></script></body></html>""")
 
 docs_of = lambda pg, t: pg.evaluate(f"window.__docs.filter(d => d.type === '{t}').map(d => [d.id, d.name, d.description])")
@@ -60,6 +62,7 @@ with sync_playwright() as p:
     pg = b.new_page(viewport={"width": 1400, "height": 1000})
     errors = []
     pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.on("console", lambda m: ("Content Security Policy" in m.text or "405" in m.text) and errors.append(m.text[:120]))
     pg.goto((HERE / "app_harness.html").as_uri())
     pg.wait_for_selector("h2:has-text('Snapshots')")
     pg.wait_for_selector("[data-snapshot]")

@@ -10,6 +10,10 @@
  *
  * Thumbnails are downloaded only for the cards on screen, a few at a time,
  * and kept in memory for as long as the app is open.
+ *
+ * Dynatrace apps have their own rules on what they may load: pictures are
+ * shown from data URLs (blob URLs are blocked), and metadata is changed with
+ * updateDocument (the older metadata endpoint answers 405).
  */
 import { documentsClient } from "@dynatrace-sdk/client-document";
 import type { Snapshot } from "./snapshots";
@@ -125,7 +129,7 @@ export function syncThumbnail(snapshotId: string, snapshot: Snapshot, zones: num
     }
     if (have.zones === zones) return;
     const update = (version: string) =>
-      documentsClient.updateDocumentMetadata({ id: have.docId, optimisticLockingVersion: version, body: { name: nameFor(zones) } });
+      documentsClient.updateDocument({ id: have.docId, optimisticLockingVersion: version, body: { name: nameFor(zones) } });
     let doc;
     try {
       doc = await update(have.version);
@@ -133,7 +137,7 @@ export function syncThumbnail(snapshotId: string, snapshot: Snapshot, zones: num
       const fresh = await documentsClient.getDocumentMetadata({ id: have.docId });
       doc = await update(fresh.version);
     }
-    known.set(snapshotId, { ...have, version: doc.version, zones });
+    known.set(snapshotId, { ...have, version: doc.documentMetadata.version, zones });
   }).catch(() => undefined);
 }
 
@@ -166,14 +170,22 @@ async function slot<T>(job: () => Promise<T>): Promise<T> {
   }
 }
 
-/** An object URL for the thumbnail document's picture. */
+/**
+ * The thumbnail as a data URL (Dynatrace apps may show pictures from data
+ * URLs, not from blob URLs).
+ */
 export function thumbnailUrl(docId: string): Promise<string> {
   let p = pictures.get(docId);
   if (!p) {
     p = slot(async () => {
       const binary = await documentsClient.downloadDocumentContent({ id: docId });
       const blob = await binary.get("blob");
-      return URL.createObjectURL(blob);
+      return new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = () => reject(reader.error ?? new Error("Could not read the thumbnail"));
+        reader.readAsDataURL(blob);
+      });
     });
     p.catch(() => pictures.delete(docId));
     pictures.set(docId, p);

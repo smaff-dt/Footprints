@@ -70,12 +70,16 @@ export const documentsClient = {
     d.version = String(Number(d.version) + 1);
     return meta(d);
   },
-  async updateDocumentMetadata(config: { id: string; optimisticLockingVersion: string; body: { name?: string } }) {
+  async updateDocumentMetadata() {
+    throw new Error('Request failed: {"error":{"code":405,"message":"Method Not Allowed"}}'); // as on Dynatrace
+  },
+  async updateDocument(config: { id: string; optimisticLockingVersion: string; body: { name?: string; content?: Blob } }) {
     const d = window.__docs.find((x) => x.id === config.id)!;
     if (config.optimisticLockingVersion !== d.version) throw new Error("409 version");
     if (config.body.name) d.name = config.body.name;
+    if (config.body.content) d.content = await read(config.body.content);
     d.version = String(Number(d.version) + 1);
-    return meta(d);
+    return { documentMetadata: meta(d) };
   },
   async deleteDocument(config: { id: string }) {
     window.__docs = window.__docs.filter((x) => x.id !== config.id);
